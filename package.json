@@ -1,0 +1,19 @@
+{
+  "name": "learn-agent",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "bun run src/main.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "openai": "^6.44.0",
+    "zod": "^4.4.3"
+  }
+}
