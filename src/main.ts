@@ -1,4 +1,4 @@
-import { getMathReasoning, structuredOutput } from './ResponsesAPI/StructuredOutput';
+import { getMathAnswer, getMathReasoning, streamStructuredOutput, structuredOutput } from './ResponsesAPI/StructuredOutput';
 import { textGeneration } from './ResponsesAPI/TextGeneration';
 import OpenAI from 'openai';
 
@@ -9,7 +9,9 @@ const setup = async () => {
 
   // await textGeneration(client);
   // await structuredOutput(client);
-  await getMathReasoning(client);
+  // await getMathReasoning(client);
+  // await getMathAnswer(client);
+  await streamStructuredOutput(client);
 }
 
 await setup();
