@@ -1,4 +1,4 @@
-import { getHoroscopeFunctionCalling, getWeatherFunctionCalling } from './ResponsesAPI/FunctionCalling';
+import { getCustomToolCalling, getHoroscopeFunctionCalling, getWeatherFunctionCalling } from './ResponsesAPI/FunctionCalling';
 import { getMathAnswer, getMathReasoning, streamStructuredOutput, structuredOutput } from './ResponsesAPI/StructuredOutput';
 import { textGeneration } from './ResponsesAPI/TextGeneration';
 import OpenAI from 'openai';
@@ -14,7 +14,8 @@ const setup = async () => {
   // await getMathAnswer(client);
   // await streamStructuredOutput(client);
   // await getHoroscopeFunctionCalling(client);
-  await getWeatherFunctionCalling(client);
+  // await getWeatherFunctionCalling(client);
+  await getCustomToolCalling(client);
 }
 
 await setup();

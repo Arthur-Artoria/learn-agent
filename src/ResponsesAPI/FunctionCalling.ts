@@ -1,8 +1,5 @@
 import type OpenAI from 'openai';
-import type {
-  ResponseFunctionToolCall,
-  ResponseInputItem
-} from 'openai/resources/responses/responses.js';
+import type { ResponseFunctionToolCall, ResponseInputItem } from 'openai/resources/responses/responses.js';
 
 // 1. 为模型定义一个可调用的工具列表
 const tools: OpenAI.Responses.Tool[] = [
@@ -29,9 +26,9 @@ const getHoroscope = (sign: string) => {
   return `今天${sign}座的运势是：今天你会有一个惊喜的发现，工作上会有一个重要的合作机会，财运上会有一个意外的收获，感情上会有一个美好的邂逅，健康上会有一个意外的惊喜，学业上会有一个意外的收获。`;
 };
 
-const getWeather = async (city: string) => { 
+const getWeather = async (city: string) => {
   return `今天${city}的天气是晴天，温度是20度，湿度是50%，风力是3级，空气质量是优。`;
-}
+};
 
 export const getHoroscopeFunctionCalling = async (client: OpenAI) => {
   // 2. 创建一个响应配置，指定模型、输入和工具
@@ -65,7 +62,6 @@ export const getHoroscopeFunctionCalling = async (client: OpenAI) => {
   console.log(finalResponse.output_text);
 };
 
-
 const getWeatherTools: OpenAI.Responses.Tool[] = [
   {
     type: 'function',
@@ -78,37 +74,43 @@ const getWeatherTools: OpenAI.Responses.Tool[] = [
         city: {
           type: 'string',
           description: '城市的名称，如北京、上海、广州、深圳等',
-        }
+        },
       },
       required: ['city'],
       additionalProperties: false,
-    }
-  }
-]
+    },
+  },
+];
 
-export const getWeatherFunctionCalling = async (client: OpenAI) => { 
+export const getWeatherFunctionCalling = async (client: OpenAI) => {
   const input: ResponseInputItem[] = [{ role: 'user', content: '今天广州的天气如何？' }];
-  const finalTooCalls: ResponseInputItem.FunctionCallOutput[] = []
-  const stream = await client.responses.create({ model: 'gpt-5.4-mini', input, tools: getWeatherTools, stream: true, store: true });
+  const finalTooCalls: ResponseInputItem.FunctionCallOutput[] = [];
+  const stream = await client.responses.create({
+    model: 'gpt-5.4-mini',
+    input,
+    tools: getWeatherTools,
+    stream: true,
+    store: true,
+  });
 
-  let responseId = ''
+  let responseId = '';
 
   for await (const event of stream) {
     // console.log(event);
 
     if (event.type === 'response.created') {
-      responseId = event.response.id
+      responseId = event.response.id;
     }
 
     if (event.type === 'response.output_item.done') {
-      const outputItem = event.item
-      if (outputItem.type === 'function_call' && outputItem.name === 'getWeather') { 
-        const output = await getWeather(JSON.parse(outputItem.arguments).city)
+      const outputItem = event.item;
+      if (outputItem.type === 'function_call' && outputItem.name === 'getWeather') {
+        const output = await getWeather(JSON.parse(outputItem.arguments).city);
         finalTooCalls.push({
           type: 'function_call_output',
           output,
           call_id: outputItem.call_id,
-        })
+        });
       }
     }
   }
@@ -120,11 +122,29 @@ export const getWeatherFunctionCalling = async (client: OpenAI) => {
     store: true,
     previous_response_id: responseId,
     instructions: '仅用工具生成的天气情况来回应。',
-  })
+  });
 
   for await (const event of finalResponse) {
     if (event.type === 'response.completed') {
       console.log(event.response.output_text);
     }
   }
-}
+};
+
+export const getCustomToolCalling = async (client: OpenAI) => {
+  const tools: OpenAI.Responses.Tool[] = [
+    {
+      type: 'custom',
+      name: 'codeExec',
+      description: '执行任意 JavaScript 代码。',
+    },
+  ];
+
+  const response = await client.responses.create({
+    model: 'gpt-5.4-mini',
+    input: '使用 codeExec 工具在控制台打印 hello world。',
+    tools,
+  });
+
+  console.log(response.output);
+};
