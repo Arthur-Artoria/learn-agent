@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent Loop 速查 · learn-agent</title>
+    <link rel="stylesheet" href="../assets/styles.css" />
+  </head>
+  <body>
+    <button class="theme-toggle" id="themeToggle" title="切换主题" aria-label="切换主题">☀</button>
+    <div class="page">
+      <header class="hero">
+        <p class="eyebrow">Reference</p>
+        <h1>Agent Loop 速查</h1>
+        <p class="lede">Responses API 下的 Agent Loop 标准模式。本仓库所有 Agent 实现以此为基。</p>
+      </header>
+
+      <section>
+        <h2>伪代码骨架</h2>
+        <pre><code>function runAgent(client, initialInput, tools, options):
+    currentInput = [...initialInput]
+    trajectory = []
+    steps = 0
+
+    while steps &lt; options.maxSteps:
+        response = call_model(client, currentInput, tools, options)
+        trajectory.push({ step: steps, output: response.output })
+        currentInput.push(...response.output)
+
+        function_calls = filter(response.output, type == 'function_call')
+        if function_calls.length == 0:
+            break   // 没有 tool call → 任务完成
+
+        outputs = []
+        for each call in function_calls:
+            result = execute_tool(call.name, call.arguments)
+            outputs.push({
+                type: 'function_call_output',
+                call_id: call.call_id,
+                output: result
+            })
+
+        currentInput.push(...outputs)
+        steps++
+
+    return { output: currentInput, trajectory, steps }</code></pre>
+      </section>
+
+      <section>
+        <h2>关键参数</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>参数</th>
+              <th>含义</th>
+              <th>建议默认值</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>maxSteps</code></td>
+              <td>模型→工具→模型 循环的最大次数</td>
+              <td>10（简单任务），可按场景调</td>
+            </tr>
+            <tr>
+              <td><code>tools</code></td>
+              <td>模型可用的工具列表（<code>OpenAI.Responses.Tool[]</code>）</td>
+              <td>从工具注册表传入</td>
+            </tr>
+            <tr>
+              <td><code>instructions</code></td>
+              <td>系统级行为约束（角色、边界、格式要求）</td>
+              <td>至少一句话，不能为空</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>终止条件（本仓库标准）</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>条件</th>
+              <th>何时触发</th>
+              <th>行为</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>自然完成</td>
+              <td>模型返回的 output 中无 <code>function_call</code></td>
+              <td>返回 output_text / message 给用户</td>
+            </tr>
+            <tr>
+              <td>步数上限</td>
+              <td><code>steps >= maxSteps</code></td>
+              <td>返回当前结果 + 告知未完成</td>
+            </tr>
+            <tr>
+              <td>工具失败（后续）</td>
+              <td>工具抛异常且无法 fallback</td>
+              <td>记录错误到轨迹，优雅退出</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Input 拼接规则</h2>
+        <p>在 Responses API 中，<code>input</code> 是一个 <code>ResponseInputItem[]</code> 列表。拼接顺序：</p>
+        <ol>
+          <li>初始 user message</li>
+          <li>模型第 1 轮 output（包含 <code>function_call</code> 和 <code>message</code>）</li>
+          <li>application 回写的 <code>function_call_output</code></li>
+          <li>模型第 2 轮 output ……</li>
+          <li>……循环</li>
+        </ol>
+        <pre><code>// 每一步的正确操作：
+currentInput.push(...response.output);   // 先压模型输出
+// 执行工具后：
+currentInput.push(...functionCallOutputs);  // 再压工具结果
+// 下一轮调用时 currentInput 包含了完整历史</code></pre>
+      </section>
+
+      <section>
+        <h2>轨迹最小字段</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>字段</th>
+              <th>来源</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><code>step</code></td><td>当前步数（从 0 起）</td></tr>
+            <tr><td><code>modelOutput</code></td><td><code>response.output</code> 完整记录</td></tr>
+            <tr><td><code>toolCalls</code></td><td>从 output 中过滤出的 function_call items</td></tr>
+            <tr><td><code>toolResults</code></td><td>你写回的 function_call_output items</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <footer class="lesson-footer">
+        <p>
+          源自：
+          <a href="https://www.anthropic.com/engineering/building-effective-agents">Anthropic Building effective agents</a>
+          ·
+          <a href="https://developers.openai.com/api/docs/guides/function-calling">OpenAI Function calling</a>
+        </p>
+        <p>
+          <a href="../lessons/0002-agent-loop.html">← 返回 Lesson 0002</a>
+          · <a href="../reference/glossary.html">术语表</a>
+        </p>
+      </footer>
+    </div>
+
+    <script>
+      (() => {
+        const html = document.documentElement;
+        const btn = document.getElementById('themeToggle');
+        const saved = localStorage.getItem('theme');
+        if (saved) html.dataset.theme = saved;
+        const icons = { auto: '◐', light: '☀', dark: '☾' };
+        const update = () => { btn.textContent = icons[html.dataset.theme || 'auto']; };
+        update();
+        btn.addEventListener('click', () => {
+          const t = html.dataset.theme;
+          const next = !t || t === 'auto' ? 'light' : t === 'light' ? 'dark' : 'auto';
+          html.dataset.theme = next === 'auto' ? '' : next;
+          if (next === 'auto') { localStorage.removeItem('theme'); delete html.dataset.theme; }
+          else localStorage.setItem('theme', next);
+          update();
+        });
+      })();
+    </script>
+  </body>
+</html>

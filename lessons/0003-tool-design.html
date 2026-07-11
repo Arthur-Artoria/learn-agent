@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>0003 · 工具设计 · learn-agent</title>
+    <link rel="stylesheet" href="../assets/styles.css" />
+  </head>
+  <body>
+    <button class="theme-toggle" id="themeToggle" title="切换主题" aria-label="切换主题">☀</button>
+    <div class="page">
+      <header class="hero">
+        <p class="eyebrow">Lesson 0003 · 第 2 周工具工程</p>
+        <h1>工具设计：模型看不懂的 tool，等于没写</h1>
+        <p class="lede">
+          Agent Loop 跑通了，但当你把 mock 工具换成真实工具时，一个新的问题浮出水面：
+          模型怎么用你的工具，取决于你怎么"介绍"这些工具。工具描述就是模型的使用说明书。
+        </p>
+        <div class="meta">
+          <span>约 10–15 分钟</span>
+          <span>前置：L0–L5（已掌握）</span>
+          <span><a href="../reference/glossary.html">术语表</a></span>
+          <span><a href="../reference/tool-design-patterns.html">工具设计速查</a></span>
+        </div>
+      </header>
+
+      <section>
+        <h2>1. 工具不是 API，是给 AI 看的"合同"</h2>
+        <p>
+          这是本课最核心的认知转变：
+        </p>
+        <div class="grid-2">
+          <div class="card ok">
+            <span class="badge ok">传统 API</span>
+            <p style="margin-top: 0.5rem; font-family: var(--sans); font-size: 0.9rem">
+              确定性系统 ↔ 确定性系统<br />
+              调用方知道精确的入参格式<br />
+              错误码是给程序员读的
+            </p>
+          </div>
+          <div class="card accent">
+            <span class="badge accent">Agent Tool</span>
+            <p style="margin-top: 0.5rem; font-family: var(--sans); font-size: 0.9rem">
+              非确定性 LLM ↔ 确定性代码<br />
+              模型从自然语言中推断何时调用<br />
+              错误信息要能引导模型修正
+            </p>
+          </div>
+        </div>
+        <div class="callout">
+          <strong>Anthropic 的原话：</strong>
+          "Tools are a new kind of software — a contract between deterministic systems and non-deterministic agents."
+          <br />
+          <span style="font-size: 0.85rem; color: var(--muted)">
+            — <a href="https://www.anthropic.com/engineering/writing-tools-for-agents">Writing effective tools for agents</a>
+          </span>
+        </div>
+      </section>
+
+      <section>
+        <h2>2. 三个支柱：name · description · parameters</h2>
+        <p>一个工具定义由三部分组成。每一部分的打磨都会直接影响模型的调用准确率：</p>
+
+        <table>
+          <thead>
+            <tr><th>支柱</th><th>好例子</th><th>差例子</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>name</strong></td>
+              <td><code>get_weather</code>、<code>add_todo</code></td>
+              <td><code>tool_1</code>、<code>handleStuff</code></td>
+            </tr>
+            <tr>
+              <td><strong>description</strong></td>
+              <td>"获取指定城市的当前天气，返回温度、湿度和天气状况"</td>
+              <td>"天气工具"</td>
+            </tr>
+            <tr>
+              <td><strong>parameters</strong></td>
+              <td><code>{city: string, units?: "celsius"|"fahrenheit"}</code></td>
+              <td><code>{data: object}</code></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>name 规则</h3>
+        <ul>
+          <li>用 <code>动词_名词</code> 格式，小写 + 下划线</li>
+          <li>名称本身就是最低成本的描述——模型看到 <code>search_contacts</code> 比 <code>list_contacts</code> 更准确知道要做什么</li>
+          <li>如果工具多了，用前缀命名空间：<code>todo_add</code>、<code>todo_list</code>、<code>file_read</code></li>
+        </ul>
+
+        <h3>description 是 80% 的功夫</h3>
+        <p>Anthropic 的建议："像给团队新同事解释这个工具一样写描述。" 好的 description 应该包含：</p>
+        <ol>
+          <li><strong>做什么</strong>——一句话说清功能</li>
+          <li><strong>何时用</strong>——什么场景下该调这个工具而不是别的</li>
+          <li><strong>返回什么</strong>——输出格式的简要说明</li>
+          <li><strong>边界</strong>——什么情况不该用（比如"不能修改已有事件"）</li>
+        </ol>
+        <pre><code>// 好的 description
+description: "添加一条新的待办事项到任务列表。返回创建成功的 todo 对象，
+包含自动生成的 id 和时间戳。仅用于创建新任务，不能用于修改或删除已有任务。"</code></pre>
+
+        <h3>parameters 最关键的两个开关</h3>
+        <pre><code>parameters: {
+  type: 'object',
+  properties: { /* ... */ },
+  required: ['title'],          // 必填字段列表
+  additionalProperties: false,  // 禁止模型编造参数
+}</code></pre>
+        <p><code>additionalProperties: false</code> 是防止模型幻觉的重要护栏——没有它，模型可能凭空添加 <code>priority_level</code> 之类的字段。</p>
+      </section>
+
+      <section>
+        <h2>3. 工具出错时：别崩，教会模型怎么做</h2>
+        <p>你的 <code>executeTool</code> 目前是 <code>switch/case</code> + 直接返回字符串，一切正常。真实工具会失败——文件不存在、API 超时、参数格式错。</p>
+        <p>处理原则：</p>
+
+        <div class="card">
+          <pre style="background: none; padding: 0.5rem 0 0 0; margin: 0"><code>// ❌ 绝对不要这样——模型不知道发生了什么
+throw new Error("ENOENT: no such file")
+
+// ✅ 返回结构化的错误文本，告诉模型怎么修正
+return "错误：文件 'tasks.json' 不存在。
+建议：先用 create_file 工具创建 tasks.json，再重试。"</code></pre>
+        </div>
+
+        <p class="sidenote">
+          Anthropic 把这种思路叫 <strong>Poka-yoke</strong>（防错设计）——让正确做法比错误做法更容易。
+          参数名叫 <code>user_id</code> 比叫 <code>user</code> 更不容易传错类型。
+        </p>
+      </section>
+
+      <section>
+        <h2>4. 工具注册表：让 Agent Loop 不再认识具体工具</h2>
+        <p>你现在 <code>loop.ts</code> 里的 <code>executeTool</code> 是从 <code>FunctionCalling.ts</code> 导入的 switch/case。
+        每加一个新工具就要改这个函数——这会让它快速膨胀。</p>
+        <p>工具注册表模式：</p>
+        <pre><code>// src/tools/registry.ts
+type ToolHandler = (args: Record&lt;string, unknown&gt;) =&gt; Promise&lt;string&gt;;
+
+const registry = new Map&lt;string, { schema: Tool; handler: ToolHandler }&gt;();
+
+export function registerTool(name: string, schema: Tool, handler: ToolHandler) {
+  registry.set(name, { schema, handler });
+}
+
+export function getToolSchemas(): Tool[] {
+  return [...registry.values()].map(r =&gt; r.schema);
+}
+
+export async function executeTool(call: ResponseFunctionToolCall): Promise&lt;string&gt; {
+  const tool = registry.get(call.name);
+  if (!tool) return `错误：未知工具 "${call.name}"`;
+  try {
+    return await tool.handler(JSON.parse(call.arguments));
+  } catch (e) {
+    return `工具 "${call.name}" 执行失败：${e instanceof Error ? e.message : String(e)}`;
+  }
+}</code></pre>
+        <p>这样 Agent Loop 只依赖 <code>executeTool</code> 和 <code>getToolSchemas()</code>，不知道任何具体工具的存在。</p>
+      </section>
+
+      <section>
+        <h2>5. 你的待办管家需要哪些工具</h2>
+        <p>回到你的 Mission（个人任务管家），最小可行工具集：</p>
+        <table>
+          <thead>
+            <tr><th>工具名</th><th>做什么</th><th>优先级</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>add_todo</code></td><td>新增一条待办</td><td><span class="badge ok">P0</span></td></tr>
+            <tr><td><code>list_todos</code></td><td>列出所有待办（支持完成/未完成过滤）</td><td><span class="badge ok">P0</span></td></tr>
+            <tr><td><code>complete_todo</code></td><td>标记某条待办为已完成</td><td><span class="badge ok">P0</span></td></tr>
+            <tr><td><code>delete_todo</code></td><td>删除一条待办</td><td><span class="badge partial">P1</span></td></tr>
+            <tr><td><code>get_weather</code></td><td>获取天气（已有，保留）</td><td><span class="badge partial">P1</span></td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>6. 小测</h2>
+
+        <div class="quiz" data-quiz>
+          <p class="quiz-q">Agent Tool 与传统 API 最本质的区别是什么？</p>
+          <div class="quiz-options">
+            <button type="button" data-correct="false">Tool 必须用 JSON Schema 定义参数</button>
+            <button type="button" data-correct="true">Tool 的调用方是 LLM（非确定性），而非人类程序员</button>
+            <button type="button" data-correct="false">Tool 不能有必填参数</button>
+            <button type="button" data-correct="false">Tool 返回值必须是 JSON 格式</button>
+          </div>
+          <p class="quiz-feedback" data-feedback></p>
+        </div>
+
+        <div class="quiz" data-quiz>
+          <p class="quiz-q">工具执行失败时，正确的处理方式是什么？</p>
+          <div class="quiz-options">
+            <button type="button" data-correct="false">抛出异常让 Agent Loop 捕获</button>
+            <button type="button" data-correct="false">返回 HTTP 风格错误码如 500</button>
+            <button type="button" data-correct="true">返回自然语言描述的错误 + 修正建议</button>
+            <button type="button" data-correct="false">静默失败，返回空字符串</button>
+          </div>
+          <p class="quiz-feedback" data-feedback></p>
+        </div>
+
+        <div class="quiz" data-quiz>
+          <p class="quiz-q"><code>additionalProperties: false</code> 的作用是什么？</p>
+          <div class="quiz-options">
+            <button type="button" data-correct="false">让工具执行速度更快</button>
+            <button type="button" data-correct="false">允许工具接受任何格式的输入</button>
+            <button type="button" data-correct="true">防止模型幻觉，禁止传入 schema 之外的参数</button>
+            <button type="button" data-correct="false">让工具可以同时被多个模型调用</button>
+          </div>
+          <p class="quiz-feedback" data-feedback></p>
+        </div>
+      </section>
+
+      <div class="primary-source">
+        <div class="label">本课主阅读（课后打开，约 15 分钟）</div>
+        <p style="margin: 0.3rem 0 0 0">
+          <a href="https://www.anthropic.com/engineering/writing-tools-for-agents"
+            >Anthropic — Writing effective tools for agents</a
+          >
+          &nbsp; 重点读 "Principles for writing effective tools" 一节（后半段）
+        </p>
+      </div>
+
+      <section>
+        <h2>7. 课后行动</h2>
+        <ol>
+          <li><strong>读 Anthropic 文章的 Principles 一节</strong>，不需要读完整篇。</li>
+          <li>
+            <strong>创建 <code>src/tools/registry.ts</code></strong>：
+            实现工具注册表模式（Map + registerTool + executeTool + getToolSchemas）。
+          </li>
+          <li>
+            <strong>实现 <code>add_todo</code> + <code>list_todos</code></strong>：
+            先用内存数组存储，后面再落盘。每个工具写好 description 和 parameters。
+          </li>
+          <li>
+            <strong>改造 <code>loop.ts</code></strong>：
+            让它从 registry 拿 tool schemas，用 registry 的 executeTool 替代硬编码版本。
+          </li>
+          <li>下一会话对我说：<strong>「检查我的工具注册表」</strong>。</li>
+        </ol>
+      </section>
+
+      <nav class="lesson-nav">
+        <a href="./0002-agent-loop.html">← 上一课: 0002 Agent Loop</a>
+        <a href="../CURRICULUM.md" class="nav-index">课程索引</a>
+        <span></span>
+      </nav>
+
+      <footer class="lesson-footer">
+        <p>
+          <strong>定义工具遇到困难？</strong>——贴你的 schema + description，我帮你打磨。
+        </p>
+        <p>
+          相关文件：
+          <a href="../CURRICULUM.md">CURRICULUM.md</a> ·
+          <a href="../reference/tool-design-patterns.html">工具设计速查</a> ·
+          <a href="../reference/glossary.html">术语表</a>
+        </p>
+      </footer>
+    </div>
+
+    <script>
+      (() => {
+        const html = document.documentElement;
+        const btn = document.getElementById('themeToggle');
+        const saved = localStorage.getItem('theme');
+        if (saved) html.dataset.theme = saved;
+        const icons = { auto: '◐', light: '☀', dark: '☾' };
+        const update = () => { btn.textContent = icons[html.dataset.theme || 'auto']; };
+        update();
+        btn.addEventListener('click', () => {
+          const t = html.dataset.theme;
+          const next = !t || t === 'auto' ? 'light' : t === 'light' ? 'dark' : 'auto';
+          html.dataset.theme = next === 'auto' ? '' : next;
+          if (next === 'auto') { localStorage.removeItem('theme'); delete html.dataset.theme; }
+          else localStorage.setItem('theme', next);
+          update();
+        });
+      })();
+      document.querySelectorAll("[data-quiz]").forEach((quiz) => {
+        const feedback = quiz.querySelector("[data-feedback]");
+        const buttons = [...quiz.querySelectorAll("button")];
+        buttons.forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const correct = btn.dataset.correct === "true";
+            buttons.forEach((b) => {
+              b.disabled = true;
+              if (b.dataset.correct === "true") b.classList.add("correct");
+            });
+            if (!correct) btn.classList.add("wrong");
+            if (feedback) {
+              feedback.textContent = correct ? "正确。" : "再想想。";
+            }
+          });
+        });
+      });
+    </script>
+  </body>
+</html>

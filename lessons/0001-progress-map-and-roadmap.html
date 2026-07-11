@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>0001 · 进度地图与八周路线 · learn-agent</title>
+    <link rel="stylesheet" href="../assets/styles.css" />
+  </head>
+  <body>
+    <button class="theme-toggle" id="themeToggle" title="切换主题" aria-label="切换主题">☀</button>
+    <div class="page">
+      <header class="hero">
+        <p class="eyebrow">Lesson 0001 · Orientation</p>
+        <h1>你的 Agent 学习进度地图</h1>
+        <p class="lede">
+          基于本仓库代码与 git 历史做的诊断：你已经站在「会调 Responses API + Tool」的平台上；
+          通往「可交付生产力 Agent + 求职叙事」的最短路径，是先补上 <strong>Agent Loop</strong>。
+        </p>
+        <div class="meta">
+          <span>约 8–12 分钟</span>
+          <span>Mission：求职竞争力 + 两个月生产力 Agent</span>
+          <span><a href="../reference/glossary.html">术语表</a></span>
+          <span><a href="../CURRICULUM.md">完整课表</a></span>
+        </div>
+      </header>
+
+      <section>
+        <h2>1. 一张图看懂你在哪</h2>
+        <div class="card">
+          <div class="layer">
+            <span class="layer-mark done">L0</span>
+            <div class="layer-body">
+              <h3>环境与调用 ✅</h3>
+              <p><code>main.ts</code> · Bun · OpenAI client · <code>GODEX_BASE_URL</code></p>
+            </div>
+          </div>
+          <div class="layer">
+            <span class="layer-mark done">L1</span>
+            <div class="layer-body">
+              <h3>文本生成 ✅</h3>
+              <p><code>TextGeneration.ts</code> — <code>responses.create</code> + instructions + reasoning</p>
+            </div>
+          </div>
+          <div class="layer">
+            <span class="layer-mark done">L2</span>
+            <div class="layer-body">
+              <h3>结构化输出 ✅</h3>
+              <p><code>StructuredOutput.ts</code> — Zod parse、refusal、stream</p>
+            </div>
+          </div>
+          <div class="layer">
+            <span class="layer-mark done">L3</span>
+            <div class="layer-body">
+              <h3>单轮 Tool Calling ✅</h3>
+              <p>定义 tools → 拿 <code>function_call</code> → 执行 → <code>function_call_output</code> → 再问模型</p>
+            </div>
+          </div>
+          <div class="layer">
+            <span class="layer-mark partial">L4</span>
+            <div class="layer-body">
+              <h3>流式 Tool / 会话衔接 🟡</h3>
+              <p>天气 demo 的 stream + <code>previous_response_id</code>；custom tool 刚起步，尚未做成通用运行时</p>
+            </div>
+          </div>
+          <div class="layer">
+            <span class="layer-mark todo">L5</span>
+            <div class="layer-body">
+              <h3>Agent Loop ❌ 下一站</h3>
+              <p>循环直到无 tool / 达 <code>maxSteps</code>；记录轨迹。这是「API 练习」变「Agent」的分界线。</p>
+            </div>
+          </div>
+          <div class="layer">
+            <span class="layer-mark todo">L6–L9</span>
+            <div class="layer-body">
+              <h3>工具工程 · 记忆 · 可靠性 · 作品 ❌</h3>
+              <p>真实副作用工具、会话恢复、护栏与评测、可演示的生产力场景</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="callout">
+          <strong>关键判断：</strong>
+          你不是从零开始。git 提交路径（text → structured → tools → stream tools → custom）说明你在按官方能力面系统推进。
+          缺口不是「再多调几个 API」，而是把已会的单步握手收成<strong>可控多步系统</strong>。
+        </div>
+      </section>
+
+      <section>
+        <h2>2. 你代码里已经「像 Agent」的部分</h2>
+        <p>
+          以星座 demo 为例：你已经亲手写过 tool calling 的<strong>一个完整回合</strong>——这正是 Agent Loop 的原子步骤。
+          <a href="https://developers.openai.com/api/docs/guides/function-calling">OpenAI Function calling 文档</a>
+          把这件事描述为应用与模型之间的多步对话。
+        </p>
+        <pre><code>// 你已掌握的「一步」
+1. 带 tools 调用模型
+2. 从 output 里取出 function_call
+3. 本地执行 getHoroscope / getWeather
+4. 把 function_call_output 塞回 input
+5. 再调一次模型，得到最终文本
+
+// 还缺的「循环」
+while (还有 function_call && steps &lt; maxSteps) {
+  执行工具 → 回填 → 再调模型
+}
+// 若模型只回 message、没有 tool call → 结束</code></pre>
+        <p class="sidenote">
+          术语对齐见 <a href="../reference/glossary.html">术语表</a>：
+          <strong>Tool call</strong> ≠ 已执行；<strong>Agent Loop</strong> ≠ 单次 function calling。
+        </p>
+      </section>
+
+      <section>
+        <h2>3. 为什么「两个月做生产力 Agent」是可行的</h2>
+        <p>
+          行业共识偏向<strong>简单可组合</strong>，而不是一上来 Multi-Agent 平台。
+          Anthropic 在
+          <a href="https://www.anthropic.com/engineering/building-effective-agents">Building effective agents</a>
+          中强调：成功实现多用简单模式；复杂框架不是默认答案。
+          OpenAI 的
+          <a href="https://cdn.openai.com/business-guides-and-resources/a-practical-guide-to-building-agents.pdf">Practical guide to building agents</a>
+          也建议从强基础（模型 + 清晰工具 + 结构化指令）的单 Agent 起步，必要时再演进。
+        </p>
+        <div class="grid-2">
+          <div class="card ok">
+            <span class="badge ok">两月主路径</span>
+            <p style="margin-top: 0.6rem; font-family: var(--sans); font-size: 0.9rem">
+              Loop → 真工具 → 会话状态 → 一个垂直生产力 MVP → 护栏与 demo 叙事
+            </p>
+          </div>
+          <div class="card gap">
+            <span class="badge gap">刻意延后</span>
+            <p style="margin-top: 0.6rem; font-family: var(--sans); font-size: 0.9rem">
+              多 Agent 编排、自研框架、重度 RAG 平台——面试加分，但不是地基
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>4. 八周路线（压缩版）</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>周</th>
+              <th>焦点</th>
+              <th>你能秀给别人看的东西</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1</td>
+              <td>Agent Loop</td>
+              <td><code>runAgent()</code> 多步调工具</td>
+            </tr>
+            <tr>
+              <td>2</td>
+              <td>工具工程</td>
+              <td>真实文件/HTTP/待办工具 + 错误不崩</td>
+            </tr>
+            <tr>
+              <td>3</td>
+              <td>计划与结构化状态</td>
+              <td>可见的分步计划轨迹</td>
+            </tr>
+            <tr>
+              <td>4</td>
+              <td>会话与记忆</td>
+              <td>重启进程仍接得上任务</td>
+            </tr>
+            <tr>
+              <td>5</td>
+              <td>生产力 MVP</td>
+              <td>3 个用户故事可演示</td>
+            </tr>
+            <tr>
+              <td>6</td>
+              <td>可靠性</td>
+              <td>步数/日志/最小评测集</td>
+            </tr>
+            <tr>
+              <td>7</td>
+              <td>作品与面试叙事</td>
+              <td>README + 10 分钟架构讲解</td>
+            </tr>
+            <tr>
+              <td>8</td>
+              <td>缓冲 / 加分</td>
+              <td>轻 RAG 或 workflow 对照</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>细节、验收标准与每周节奏见 <a href="../CURRICULUM.md"><code>CURRICULUM.md</code></a>。</p>
+      </section>
+
+      <section>
+        <h2>5. 小测：巩固「你现在差在哪」</h2>
+        <div class="quiz" data-quiz>
+          <p class="quiz-q">下列哪一项最准确描述你仓库里 <code>getHoroscopeFunctionCalling</code> 的能力？</p>
+          <div class="quiz-options">
+            <button type="button" data-correct="false">完整 Agent：可多步自治直到任务完成</button>
+            <button type="button" data-correct="true">单轮工具握手：一次 tool 后再生成最终答复</button>
+            <button type="button" data-correct="false">工作流引擎：固定 A→B→C 步骤编排执行</button>
+            <button type="button" data-correct="false">多智能体：规划者与执行者自动分工协作</button>
+          </div>
+          <p class="quiz-feedback" data-feedback></p>
+        </div>
+
+        <div class="quiz" data-quiz>
+          <p class="quiz-q">若两月目标是「合格生产力 Agent」，第 1 周最该优先练什么？</p>
+          <div class="quiz-options">
+            <button type="button" data-correct="false">先上多 Agent 框架以提升面试关键词密度</button>
+            <button type="button" data-correct="false">先做大规模 RAG 向量库再考虑工具调用</button>
+            <button type="button" data-correct="true">先写带 maxSteps 的 Agent Loop 运行时</button>
+            <button type="button" data-correct="false">先重写 Chat Completions 以巩固历史 API</button>
+          </div>
+          <p class="quiz-feedback" data-feedback></p>
+        </div>
+      </section>
+
+      <div class="primary-source">
+        <div class="label">本课主阅读（课后打开）</div>
+        <p style="margin: 0">
+          <a href="https://www.anthropic.com/engineering/building-effective-agents"
+            >Anthropic — Building effective agents</a
+          >
+          <br />
+          <span style="color: var(--muted); font-size: 0.85rem"
+            >读「workflow vs agent」与「保持简单」两段即可（15–20 分钟）。下一课我们会把它映射到你的 TypeScript loop。</span
+          >
+        </p>
+      </div>
+
+      <section>
+        <h2>6. 课后行动（项目驱动）</h2>
+        <ol>
+          <li>打开 <a href="../CURRICULUM.md">CURRICULUM.md</a>，标出你更想做的作品方向（任务管家 / 研究助手 / 代码助手）。</li>
+          <li>用自己的话（不看代码）默写 tool calling 的五步；卡壳再回看 <code>FunctionCalling.ts</code>。</li>
+          <li>下一会话对我说：<strong>「开始 Lesson 0002 / 实现 Agent Loop」</strong>。</li>
+        </ol>
+      </section>
+
+      <nav class="lesson-nav">
+        <span></span>
+        <a href="../CURRICULUM.md" class="nav-index">课程索引</a>
+        <a href="./0002-agent-loop.html">下一课: 0002 Agent Loop →</a>
+      </nav>
+
+      <footer class="lesson-footer">
+        <p>
+          <strong>有任何不清楚的地方，直接问我（你的老师）。</strong>
+          追问概念、对照你的代码 review、或调整八周节奏都可以。
+        </p>
+        <p>
+          相关文件：
+          <a href="../MISSION.md">MISSION.md</a> ·
+          <a href="../RESOURCES.md">RESOURCES.md</a> ·
+          <a href="../learning-records/0001-baseline-responses-api-progress.md">Learning record 0001</a>
+        </p>
+      </footer>
+    </div>
+
+    <script>
+      (() => {
+        const html = document.documentElement;
+        const btn = document.getElementById('themeToggle');
+        const saved = localStorage.getItem('theme');
+        if (saved) html.dataset.theme = saved;
+        const icons = { auto: '◐', light: '☀', dark: '☾' };
+        const update = () => { btn.textContent = icons[html.dataset.theme || 'auto']; };
+        update();
+        btn.addEventListener('click', () => {
+          const t = html.dataset.theme;
+          const next = !t || t === 'auto' ? 'light' : t === 'light' ? 'dark' : 'auto';
+          html.dataset.theme = next === 'auto' ? '' : next;
+          if (next === 'auto') { localStorage.removeItem('theme'); delete html.dataset.theme; }
+          else localStorage.setItem('theme', next);
+          update();
+        });
+      })();
+      document.querySelectorAll("[data-quiz]").forEach((quiz) => {
+        const feedback = quiz.querySelector("[data-feedback]");
+        const buttons = [...quiz.querySelectorAll("button")];
+        buttons.forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const correct = btn.dataset.correct === "true";
+            buttons.forEach((b) => {
+              b.disabled = true;
+              if (b.dataset.correct === "true") b.classList.add("correct");
+            });
+            if (!correct) btn.classList.add("wrong");
+            feedback.textContent = correct
+              ? "正确。单轮握手是 loop 的原子步骤，不是完整 Agent。"
+              : "再想一下：当前代码是「调用一次工具再答」，还没有 while 循环。";
+          });
+        });
+      });
+    </script>
+  </body>
+</html>

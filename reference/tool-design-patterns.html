@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>工具设计速查 · learn-agent</title>
+    <link rel="stylesheet" href="../assets/styles.css" />
+  </head>
+  <body>
+    <button class="theme-toggle" id="themeToggle" title="切换主题" aria-label="切换主题">☀</button>
+    <div class="page">
+      <header class="hero">
+        <p class="eyebrow">Reference</p>
+        <h1>工具设计速查</h1>
+        <p class="lede">Agent Tool 的定义规范、错误处理模式与注册表架构。</p>
+      </header>
+
+      <section>
+        <h2>Tool Schema 模板</h2>
+        <pre><code>{
+  type: 'function',
+  name: 'verb_noun',           // 小写_下划线，动词开头
+  description: [
+    '做什么。何时用。返回什么。',
+    '边界：什么情况不该用。'
+  ].join(' '),
+  parameters: {
+    type: 'object',
+    properties: {
+      required_param: { type: 'string', description: '...' },
+      optional_param: { type: 'string', description: '...' },
+    },
+    required: ['required_param'],
+    additionalProperties: false,  // 必须
+  },
+  strict: true,                   // 必须
+}</code></pre>
+      </section>
+
+      <section>
+        <h2>命名规范</h2>
+        <table>
+          <thead>
+            <tr><th>领域</th><th>模式</th><th>示例</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>CRUD</td><td><code>{add|get|list|update|delete}_{resource}</code></td><td><code>add_todo</code>, <code>list_todos</code></td></tr>
+            <tr><td>查询</td><td><code>{search|find|query}_{target}</code></td><td><code>search_contacts</code></td></tr>
+            <tr><td>多域命名空间</td><td><code>{domain}_{action}_{resource}</code></td><td><code>todo_add</code>, <code>file_read</code></td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Description 清单</h2>
+        <p>一条好的 description 回答四个问题：</p>
+        <ol>
+          <li><strong>做什么</strong>：一句话功能概述</li>
+          <li><strong>何时用</strong>：与相似工具的区分</li>
+          <li><strong>返回什么</strong>：输出内容的简要说明</li>
+          <li><strong>边界</strong>：不能做的事，不该用的场景</li>
+        </ol>
+      </section>
+
+      <section>
+        <h2>错误处理模式</h2>
+        <table>
+          <thead>
+            <tr><th>原则</th><th>做法</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>不抛异常</td><td>工具 handler 用 try/catch 包裹，返回错误文本</td></tr>
+            <tr><td>说明原因</td><td>"文件不存在" 而非 "ENOENT"</td></tr>
+            <tr><td>给建议</td><td>"请先用 create_file 创建该文件"</td></tr>
+            <tr><td>可操作</td><td>让模型知道下一步怎么做</td></tr>
+          </tbody>
+        </table>
+        <pre><code>// ✅ 模型能理解并修正
+return "错误：未找到名为 'work' 的标签。可用标签：personal, urgent, later。";
+
+// ❌ 模型不知所措
+throw new Error("INVALID_TAG");</code></pre>
+      </section>
+
+      <section>
+        <h2>工具注册表架构</h2>
+        <pre><code>// registry.ts
+const tools = new Map&lt;string, { schema: Tool; handler: Fn }&gt;();
+
+registerTool(name, schema, handler)  // 注册
+getToolSchemas(): Tool[]              // 给 Agent Loop 用
+executeTool(call): Promise&lt;string&gt;    // 路由 + 错误包裹</code></pre>
+        <p>Agent Loop 只依赖 <code>getToolSchemas()</code> 和 <code>executeTool()</code>，不感知具体实现。</p>
+      </section>
+
+      <footer class="lesson-footer">
+        <p>
+          源自：
+          <a href="https://www.anthropic.com/engineering/writing-tools-for-agents">Anthropic Writing effective tools for agents</a>
+        </p>
+        <p>
+          <a href="../lessons/0003-tool-design.html">← 返回 Lesson 0003</a>
+          · <a href="../reference/glossary.html">术语表</a>
+        </p>
+      </footer>
+    </div>
+
+    <script>
+      (() => {
+        const html = document.documentElement;
+        const btn = document.getElementById('themeToggle');
+        const saved = localStorage.getItem('theme');
+        if (saved) html.dataset.theme = saved;
+        const icons = { auto: '◐', light: '☀', dark: '☾' };
+        const update = () => { btn.textContent = icons[html.dataset.theme || 'auto']; };
+        update();
+        btn.addEventListener('click', () => {
+          const t = html.dataset.theme;
+          const next = !t || t === 'auto' ? 'light' : t === 'light' ? 'dark' : 'auto';
+          html.dataset.theme = next === 'auto' ? '' : next;
+          if (next === 'auto') { localStorage.removeItem('theme'); delete html.dataset.theme; }
+          else localStorage.setItem('theme', next);
+          update();
+        });
+      })();
+    </script>
+  </body>
+</html>

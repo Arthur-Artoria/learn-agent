@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent 术语表 · learn-agent</title>
+    <link rel="stylesheet" href="../assets/styles.css" />
+  </head>
+  <body>
+    <button class="theme-toggle" id="themeToggle" title="切换主题" aria-label="切换主题">☀</button>
+    <div class="page">
+      <header class="hero">
+        <p class="eyebrow">Reference</p>
+        <h1>Agent 术语表</h1>
+        <p class="lede">本课程统一用语。所有 lesson 以此为准，避免「Agent / Workflow / Tool」混用。</p>
+      </header>
+
+      <table>
+        <thead>
+          <tr>
+            <th>术语</th>
+            <th>定义（本课程）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Model</strong></td>
+            <td>负责推理与生成的 LLM；通过 Responses API 调用。</td>
+          </tr>
+          <tr>
+            <td><strong>Tool / Function</strong></td>
+            <td>模型可请求执行的外部能力；由你的代码真正运行并回传结果。</td>
+          </tr>
+          <tr>
+            <td><strong>Tool call</strong></td>
+            <td>模型输出的「请调用某工具 + 参数」；尚未执行。</td>
+          </tr>
+          <tr>
+            <td><strong>Tool result</strong></td>
+            <td>你执行工具后回写给模型的输出（如 <code>function_call_output</code>）。</td>
+          </tr>
+          <tr>
+            <td><strong>Agent Loop</strong></td>
+            <td>重复「模型 →（可选）工具 → 回填」直到得到最终答复或触达限制。</td>
+          </tr>
+          <tr>
+            <td><strong>Workflow</strong></td>
+            <td>步骤基本固定的编排（A→B→C）；比 Agent 更可预测，自治更少。</td>
+          </tr>
+          <tr>
+            <td><strong>Instructions</strong></td>
+            <td>对模型行为的稳定约束（角色、边界、输出风格）。</td>
+          </tr>
+          <tr>
+            <td><strong>Structured output</strong></td>
+            <td>按 schema（如 Zod）约束的模型输出，便于程序消费。</td>
+          </tr>
+          <tr>
+            <td><strong>Session / Memory</strong></td>
+            <td>跨轮次保留的状态；短期对话历史与长期记忆是不同层级。</td>
+          </tr>
+          <tr>
+            <td><strong>Guardrail</strong></td>
+            <td>防止失控的约束：步数上限、超时、权限、输出校验等。</td>
+          </tr>
+          <tr>
+            <td><strong>Trajectory</strong></td>
+            <td>一次 run 中模型与工具的完整轨迹，用于调试与评测。</td>
+          </tr>
+          <tr>
+            <td><strong>previous_response_id</strong></td>
+            <td>Responses API 用上一响应 ID 衔接多轮，减少手动拼 history。</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p class="sidenote">
+        参考：
+        <a href="https://developers.openai.com/api/docs/guides/function-calling">OpenAI Function calling</a> ·
+        <a href="https://www.anthropic.com/engineering/building-effective-agents">Anthropic Building effective agents</a>
+      </p>
+
+      <footer class="lesson-footer">
+        <a href="../lessons/0001-progress-map-and-roadmap.html">← 返回 Lesson 0001</a>
+        · <a href="../CURRICULUM.md">完整课表 CURRICULUM.md</a>
+      </footer>
+    </div>
+
+    <script>
+      (() => {
+        const html = document.documentElement;
+        const btn = document.getElementById('themeToggle');
+        const saved = localStorage.getItem('theme');
+        if (saved) html.dataset.theme = saved;
+        const icons = { auto: '◐', light: '☀', dark: '☾' };
+        const update = () => { btn.textContent = icons[html.dataset.theme || 'auto']; };
+        update();
+        btn.addEventListener('click', () => {
+          const t = html.dataset.theme;
+          const next = !t || t === 'auto' ? 'light' : t === 'light' ? 'dark' : 'auto';
+          html.dataset.theme = next === 'auto' ? '' : next;
+          if (next === 'auto') { localStorage.removeItem('theme'); delete html.dataset.theme; }
+          else localStorage.setItem('theme', next);
+          update();
+        });
+      })();
+    </script>
+  </body>
+</html>

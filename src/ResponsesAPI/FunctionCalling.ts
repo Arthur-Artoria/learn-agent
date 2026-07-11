@@ -2,7 +2,7 @@ import type OpenAI from 'openai';
 import type { ResponseFunctionToolCall, ResponseInputItem } from 'openai/resources/responses/responses.js';
 
 // 1. 为模型定义一个可调用的工具列表
-const tools: OpenAI.Responses.Tool[] = [
+export const tools: OpenAI.Responses.Tool[] = [
   {
     type: 'function',
     name: 'get_horoscope',
@@ -20,15 +20,46 @@ const tools: OpenAI.Responses.Tool[] = [
     },
     strict: true,
   },
+  {
+    type: 'function',
+    name: 'get_weather',
+    description: '获取城市的天气情况',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        city: {
+          type: 'string',
+          description: '城市的名称，如北京、上海、广州、深圳等',
+        },
+      },
+      required: ['city'],
+      additionalProperties: false,
+    },
+  },
 ];
 
-const getHoroscope = (sign: string) => {
+export const getHoroscope = (sign: string) => {
   return `今天${sign}座的运势是：今天你会有一个惊喜的发现，工作上会有一个重要的合作机会，财运上会有一个意外的收获，感情上会有一个美好的邂逅，健康上会有一个意外的惊喜，学业上会有一个意外的收获。`;
 };
 
-const getWeather = async (city: string) => {
+export const getWeather = async (city: string) => {
   return `今天${city}的天气是晴天，温度是20度，湿度是50%，风力是3级，空气质量是优。`;
 };
+
+export const executeTool = async (functionCall: ResponseFunctionToolCall) => { 
+  const params = JSON.parse(functionCall.arguments);
+  switch (functionCall.name) {
+    case 'get_weather':
+      return getWeather(params.city)
+  
+    case 'get_horoscope':
+      return getHoroscope(params.sign)
+    
+    default:
+      throw new Error(`Unknown tool: ${functionCall.name}`)
+  }
+}
 
 export const getHoroscopeFunctionCalling = async (client: OpenAI) => {
   // 2. 创建一个响应配置，指定模型、输入和工具
@@ -62,33 +93,13 @@ export const getHoroscopeFunctionCalling = async (client: OpenAI) => {
   console.log(finalResponse.output_text);
 };
 
-const getWeatherTools: OpenAI.Responses.Tool[] = [
-  {
-    type: 'function',
-    name: 'getWeather',
-    description: '获取城市的天气情况',
-    strict: true,
-    parameters: {
-      type: 'object',
-      properties: {
-        city: {
-          type: 'string',
-          description: '城市的名称，如北京、上海、广州、深圳等',
-        },
-      },
-      required: ['city'],
-      additionalProperties: false,
-    },
-  },
-];
-
 export const getWeatherFunctionCalling = async (client: OpenAI) => {
   const input: ResponseInputItem[] = [{ role: 'user', content: '今天广州的天气如何？' }];
   const finalTooCalls: ResponseInputItem.FunctionCallOutput[] = [];
   const stream = await client.responses.create({
     model: 'gpt-5.4-mini',
     input,
-    tools: getWeatherTools,
+    tools,
     stream: true,
     store: true,
   });
@@ -104,7 +115,7 @@ export const getWeatherFunctionCalling = async (client: OpenAI) => {
 
     if (event.type === 'response.output_item.done') {
       const outputItem = event.item;
-      if (outputItem.type === 'function_call' && outputItem.name === 'getWeather') {
+      if (outputItem.type === 'function_call' && outputItem.name === 'get_weather') {
         const output = await getWeather(JSON.parse(outputItem.arguments).city);
         finalTooCalls.push({
           type: 'function_call_output',

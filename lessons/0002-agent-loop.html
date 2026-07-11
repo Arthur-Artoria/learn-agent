@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>0002 · Agent Loop · learn-agent</title>
+    <link rel="stylesheet" href="../assets/styles.css" />
+  </head>
+  <body>
+    <button class="theme-toggle" id="themeToggle" title="切换主题" aria-label="切换主题">☀</button>
+    <div class="page">
+      <header class="hero">
+        <p class="eyebrow">Lesson 0002 · 第 1 周核心技能</p>
+        <h1>Agent Loop：从单轮 Tool 到 <code>runAgent</code></h1>
+        <p class="lede">
+          你已经会了 tool calling 的「一步」。Agent 的分水岭是把这一步包进循环——让模型在需要时多次调用工具，
+          直到任务完成或被限制打断。
+        </p>
+        <div class="meta">
+          <span>约 10–15 分钟</span>
+          <span>前置：L0–L3（已掌握）</span>
+          <span><a href="../reference/glossary.html">术语表</a></span>
+          <span><a href="../reference/agent-loop-pattern.html">Agent Loop 速查</a></span>
+        </div>
+      </header>
+
+      <section>
+        <h2>1. 你差的那一步</h2>
+        <p>
+          对比你仓库里两个函数的区别——这是本课唯一需要「看懂」的核心：
+        </p>
+
+        <div class="grid-2">
+          <div class="card ok">
+            <span class="badge ok">你现在有的</span>
+            <pre style="background: none; padding: 0.5rem 0 0 0; margin: 0"><code>// L3: getHoroscopeFunctionCalling
+1. 带 tools 调模型
+2. 从 output 取 function_call
+3. 执行 getHoroscope
+4. 把 function_call_output 塞回 input
+5. 再调一次模型 → 答案
+<span style="color: var(--red)">// 只跑一轮，硬编码两次调用</span></code></pre>
+          </div>
+          <div class="card accent">
+            <span class="badge accent">你要变成的</span>
+            <pre style="background: none; padding: 0.5rem 0 0 0; margin: 0"><code>// L5: Agent Loop
+1. 调模型（带 tools）
+2. while (有 function_call && steps &lt; maxSteps) {
+     执行所有工具
+     回填 function_call_output
+     再调模型
+   }
+3. 返回最终 output_text
+<span style="color: var(--green)">// 循环直到没有 tool call 或触上限</span></code></pre>
+          </div>
+        </div>
+
+        <div class="callout">
+          <strong>Anthropic 的简洁定义：</strong>
+          "Agents are just LLMs using tools based on environmental feedback in a loop."
+          <br />
+          <span style="font-size: 0.85rem; color: var(--muted)">
+            — <a href="https://www.anthropic.com/engineering/building-effective-agents">Building effective agents</a>
+          </span>
+        </div>
+      </section>
+
+      <section>
+        <h2>2. Agent Loop 的解剖</h2>
+        <p>下面是在本仓库中即将落到 <code>src/agent/loop.ts</code> 的核心结构：</p>
+
+        <pre><code>// agent/loop.ts 的核心骨架
+async function runAgent(client, input, tools, options) {
+  let currentInput = [...input];
+  const trajectory = [];  // 记录每一步，debug 用
+  let steps = 0;
+
+  while (steps &lt; options.maxSteps) {
+    // ① 调模型
+    const response = await client.responses.create({
+      model: options.model,
+      input: currentInput,
+      tools,
+      instructions: options.instructions,
+    });
+
+    trajectory.push({ step: steps, output: response.output });
+    currentInput.push(...response.output);
+
+    // ② 收集本轮的 function_call
+    const functionCalls = response.output.filter(
+      item => item.type === 'function_call'
+    );
+
+    // ③ 没有 tool call → 任务结束
+    if (functionCalls.length === 0) break;
+
+    // ④ 依次执行工具
+    const outputs = [];
+    for (const call of functionCalls) {
+      const result = await executeTool(call);
+      outputs.push({
+        type: 'function_call_output',
+        call_id: call.call_id,
+        output: result,
+      });
+    }
+
+    // ⑤ 回填 tool results
+    currentInput.push(...outputs);
+    steps++;
+  }
+
+  return { finalOutput: currentInput, trajectory, steps };
+}</code></pre>
+
+        <p>五个关键决策点（每个都会在后续课程展开）：</p>
+        <table>
+          <thead>
+            <tr>
+              <th>决策点</th>
+              <th>本课位置</th>
+              <th>后续展开</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>maxSteps</strong> 设几？</td>
+              <td>先写死 10，够用</td>
+              <td>L8 护栏课：按场景配置</td>
+            </tr>
+            <tr>
+              <td><strong>结束条件</strong>除了「无 tool call」还有什么？</td>
+              <td>模型直接回文本时终止</td>
+              <td>L3 周：模型声明「完成」状态</td>
+            </tr>
+            <tr>
+              <td><strong>工具执行</strong>是并行还是串行？</td>
+              <td>本课串行（一个接一个）</td>
+              <td>L6 工具工程：并行 + 错误处理</td>
+            </tr>
+            <tr>
+              <td><strong>会话衔接</strong>怎么处理？</td>
+              <td>自管 input 列表</td>
+              <td>L4 周：previous_response_id + 压缩</td>
+            </tr>
+            <tr>
+              <td><strong>轨迹（trajectory）</strong>存什么？</td>
+              <td>每步 output 原样记</td>
+              <td>L6 周：结构化日志 + 花费追踪</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>3. 从你现有代码到 Agent Loop 的映射</h2>
+        <p>
+          打开你的 <code>FunctionCalling.ts</code>，只看 <code>getHoroscopeFunctionCalling</code>。
+          它已经包含了 loop 所需的所有原子操作，只是被「展开」（unrolled）了一轮：
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>现有代码行</th>
+              <th>做了什么</th>
+              <th>在 loop 中变成</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>client.responses.create({ input, tools })</code></td>
+              <td>调模型</td>
+              <td>循环体第 ① 步，每次都用最新的 currentInput</td>
+            </tr>
+            <tr>
+              <td><code>response.output.filter(...function_call)</code></td>
+              <td>提取 tool call</td>
+              <td>循环体第 ② 步，每轮都可能不同</td>
+            </tr>
+            <tr>
+              <td><code>getHoroscope(JSON.parse(...))</code></td>
+              <td>执行工具</td>
+              <td>循环体第 ④ 步，按 name 路由到具体实现</td>
+            </tr>
+            <tr>
+              <td><code>input.push(...functionCallOutput)</code></td>
+              <td>回填结果</td>
+              <td>循环体第 ⑤ 步，然后回到 while 判断</td>
+            </tr>
+            <tr>
+              <td style="color: var(--red)">（不存在）</td>
+              <td style="color: var(--red)">循环条件判断</td>
+              <td style="color: var(--green)">while 头 + break 条件</td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="sidenote">
+          关键认知：你不需要学新 API，只需要给你已会的代码加一层 <code>while</code> + 计数 + break。
+        </p>
+      </section>
+
+      <section>
+        <h2>4. 什么时候结束？三种终止条件</h2>
+        <div class="card">
+          <div class="layer">
+            <span class="layer-mark done">条件 A</span>
+            <div class="layer-body">
+              <h3>没有 function_call 了</h3>
+              <p>模型本轮输出里只剩纯文本（<code>output_text</code> 或 <code>message</code>）——任务已完成，自然终止。</p>
+            </div>
+          </div>
+          <div class="layer">
+            <span class="layer-mark done">条件 B</span>
+            <div class="layer-body">
+              <h3>达到 maxSteps</h3>
+              <p>步数触顶，保护你不陷入无限循环。这时应告诉用户「任务未完成，已达步数上限」。</p>
+            </div>
+          </div>
+          <div class="layer">
+            <span class="layer-mark partial">条件 C (L8 加入)</span>
+            <div class="layer-body">
+              <h3>工具执行失败且无法恢复</h3>
+              <p>工具抛异常后，如果模型自己无法换方案，loop 应该优雅退出而不是崩掉。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>5. 不止「能跑」：轨迹（trajectory）是 Agent 的日志系统</h2>
+        <p>
+          单轮 demo 你只需要看 <code>console.log(output_text)</code>。Agent 有多步，你必须要能回溯每一步发生了什么。
+          行业里管这个叫 <strong>trajectory</strong>（轨迹）。
+        </p>
+        <p>最小可行轨迹 = 每步存下：</p>
+        <ul>
+          <li><strong>步数</strong>（step index）</li>
+          <li><strong>模型说了什么</strong>（output 中的 text/message）</li>
+          <li><strong>模型调了哪些工具 + 参数</strong>（function_call items）</li>
+          <li><strong>工具返回了什么</strong>（function_call_output items）</li>
+        </ul>
+        <p>本课只要求 <code>console.log</code> 打出轨迹。后续 L6 会做结构化日志。</p>
+      </section>
+
+      <section>
+        <h2>6. 小测</h2>
+
+        <div class="quiz" data-quiz>
+          <p class="quiz-q">Agent Loop 与单轮 tool calling 最本质的区别是什么？</p>
+          <div class="quiz-options">
+            <button type="button" data-correct="false">Agent 使用了更强的模型（gpt-5.4+）</button>
+            <button type="button" data-correct="false">Agent 需要同时注册 10 个以上的工具</button>
+            <button type="button" data-correct="true">Agent 用 while 循环重复「模型→工具→回填」直到无 tool call 或触上限</button>
+            <button type="button" data-correct="false">Agent 不需要定义工具的 parameters schema</button>
+          </div>
+          <p class="quiz-feedback" data-feedback></p>
+        </div>
+
+        <div class="quiz" data-quiz>
+          <p class="quiz-q">当模型返回的 output 中同时包含 message 和 function_call，Agent Loop 应该怎么做？</p>
+          <div class="quiz-options">
+            <button type="button" data-correct="false">忽略 message，只执行 tool call</button>
+            <button type="button" data-correct="true">记录 message 到轨迹，然后执行 tool call 并继续循环</button>
+            <button type="button" data-correct="false">直接终止，返回 message 给用户</button>
+            <button type="button" data-correct="false">只记录 function_call，丢弃 message</button>
+          </div>
+          <p class="quiz-feedback" data-feedback></p>
+        </div>
+
+        <div class="quiz" data-quiz>
+          <p class="quiz-q">maxSteps=3 意味着什么？</p>
+          <div class="quiz-options">
+            <button type="button" data-correct="false">最多调用 3 个不同的工具</button>
+            <button type="button" data-correct="true">模型→工具→模型 这个循环最多重复 3 次</button>
+            <button type="button" data-correct="false">模型最多生成 3 行 output_text</button>
+            <button type="button" data-correct="false">最多并行调用 3 个工具同时执行</button>
+          </div>
+          <p class="quiz-feedback" data-feedback></p>
+        </div>
+      </section>
+
+      <div class="primary-source">
+        <div class="label">本课主阅读（课后打开，共约 20 分钟）</div>
+        <p style="margin: 0.3rem 0 0 0">
+          <a href="https://www.anthropic.com/engineering/building-effective-agents"
+            >Anthropic — Building effective agents</a
+          >
+          &nbsp; 重点读「Agents」一节（loop + stopping conditions）
+          <br />
+          <a href="https://developers.openai.com/api/docs/guides/function-calling"
+            >OpenAI — Function calling 指南</a
+          >
+          &nbsp; 重点读「The tool calling flow」——官方确认五步可以循环
+        </p>
+      </div>
+
+      <section>
+        <h2>7. 课后行动（动手）</h2>
+        <ol>
+          <li>
+            <strong>阅读 Anthropic 文章的「Agents」一节</strong>（不需要读完全文），尤其关注
+            stopping conditions 和 "LLM in a loop with tool feedback" 的描述。
+          </li>
+          <li>
+            <strong>自己写 <code>src/agent/loop.ts</code></strong>：
+            包含 <code>runAgent()</code> 函数，实现 while loop + maxSteps + 轨迹。
+            用你已有的 horoscope 或 weather 工具测试它——确保它能跑通 2 步以上的对话。
+          </li>
+          <li>下一会话对我说：<strong>「检查我的 Agent Loop 代码」</strong>。</li>
+        </ol>
+      </section>
+
+      <nav class="lesson-nav">
+        <a href="./0001-progress-map-and-roadmap.html">← 上一课: 0001 进度地图</a>
+        <a href="../CURRICULUM.md" class="nav-index">课程索引</a>
+        <a href="./0003-tool-design.html">下一课: 0003 工具设计 →</a>
+      </nav>
+
+      <footer class="lesson-footer">
+        <p>
+          <strong>写代码时遇到任何问题，直接问我。</strong>
+          卡在 while 条件、input 拼接、类型报错——贴代码过来。
+        </p>
+        <p>
+          相关文件：
+          <a href="../CURRICULUM.md">CURRICULUM.md</a> ·
+          <a href="../reference/agent-loop-pattern.html">Agent Loop 速查</a> ·
+          <a href="../reference/glossary.html">术语表</a> ·
+          <a href="./0001-progress-map-and-roadmap.html">← Lesson 0001</a>
+        </p>
+      </footer>
+    </div>
+
+    <script>
+      (() => {
+        const html = document.documentElement;
+        const btn = document.getElementById('themeToggle');
+        const saved = localStorage.getItem('theme');
+        if (saved) html.dataset.theme = saved;
+        const icons = { auto: '◐', light: '☀', dark: '☾' };
+        const update = () => { btn.textContent = icons[html.dataset.theme || 'auto']; };
+        update();
+        btn.addEventListener('click', () => {
+          const t = html.dataset.theme;
+          const next = !t || t === 'auto' ? 'light' : t === 'light' ? 'dark' : 'auto';
+          html.dataset.theme = next === 'auto' ? '' : next;
+          if (next === 'auto') { localStorage.removeItem('theme'); delete html.dataset.theme; }
+          else localStorage.setItem('theme', next);
+          update();
+        });
+      })();
+      document.querySelectorAll("[data-quiz]").forEach((quiz) => {
+        const feedback = quiz.querySelector("[data-feedback]");
+        const buttons = [...quiz.querySelectorAll("button")];
+        buttons.forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const correct = btn.dataset.correct === "true";
+            buttons.forEach((b) => {
+              b.disabled = true;
+              if (b.dataset.correct === "true") b.classList.add("correct");
+            });
+            if (!correct) btn.classList.add("wrong");
+            if (feedback) {
+              if (correct) {
+                feedback.textContent = "正确。";
+              } else {
+                feedback.textContent = "再想想：Agent Loop 的核心是用循环替代硬编码的调用次数。";
+              }
+            }
+          });
+        });
+      });
+    </script>
+  </body>
+</html>
