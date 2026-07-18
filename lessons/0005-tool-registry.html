@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>0005 · 工具注册表与错误工程 · learn-agent</title>
+    <link rel="stylesheet" href="../assets/styles.css" />
+  </head>
+  <body>
+    <button class="theme-toggle" id="themeToggle" title="切换主题" aria-label="切换主题">☀</button>
+    <div class="page">
+      <header class="hero">
+        <p class="eyebrow">Lesson 0005 · L6 核心</p>
+        <h1>工具注册表与错误工程：从 switch-case 到可插拔轨道</h1>
+        <p class="lede">
+          L5 的 Agent Loop 跑通了，但工具还挂在 <code>FunctionCalling.ts</code> 的一个 switch 里。
+          每加一个工具就要改 <code>executeTool</code>，参数校验靠 JSON.parse 裸奔，
+          工具崩了 Agent 直接挂。这一课把工具变成<strong>可插拔模块</strong>，并让错误变成模型的输入而非程序的终点。
+        </p>
+        <div class="meta">
+          <span>约 15–20 分钟</span>
+          <span>前置：L5 Agent Loop</span>
+          <span><a href="../reference/glossary.html">术语表</a></span>
+          <span><a href="../reference/tool-design-patterns.html">工具设计速查</a></span>
+        </div>
+      </header>
+
+      <section>
+        <h2>1. 当前问题：switch-case 的尽头</h2>
+        <p>你现在的 <code>executeTool</code> 长这样（<code>FunctionCalling.ts:55-62</code>）：</p>
+
+        <div class="card gap">
+          <pre style="background: none; padding: 0; margin: 0"><code>export const executeTool = async (functionCall) => {
+  const params = JSON.parse(functionCall.arguments);  // ← 如果 arguments 格式不对呢？
+  switch (functionCall.name) {
+    case 'get_weather': return getWeather(params.city);  // ← 如果 city 不存在呢？
+    case 'get_horoscope': return getHoroscope(params.sign);
+    default: throw new Error(`Unknown tool: ${functionCall.name}`);  // ← 抛异常，Agent 崩
+  }
+}</code></pre>
+        </div>
+
+        <p style="margin-top: 0.75rem">三个问题：</p>
+        <ul>
+          <li><strong>不可扩展</strong>：每加一个工具都要改这里</li>
+          <li><strong>不防错</strong>：参数缺失/类型错误直接抛异常</li>
+          <li><strong>不可恢复</strong>：<code>throw</code> 吞掉错误，模型不知道发生了什么</li>
+        </ul>
+
+        <p>解决办法：<strong>工具注册表（Tool Registry）</strong>——一个集中管理所有工具的容器，
+          负责注册 schema、分发调用、统一错误处理。</p>
+      </section>
+
+      <section>
+        <h2>2. 工具注册表：设计</h2>
+
+        <h3>每个工具是一个对象</h3>
+        <div class="card ok">
+          <pre style="background: none; padding: 0; margin: 0"><code>interface Tool {
+  schema: OpenAI.Responses.Tool;      // 给模型看的定义
+  execute: (args: Record&lt;string, unknown&gt;) =&gt; Promise&lt;string&gt;;  // 你的执行函数
+}</code></pre>
+        </div>
+
+        <h3>注册表做三件事</h3>
+        <table>
+          <thead>
+            <tr><th>职责</th><th>方法</th><th>谁调用</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>注册工具</td>
+              <td><code>register(tool)</code></td>
+              <td>你初始化时</td>
+            </tr>
+            <tr>
+              <td>暴露 schemas</td>
+              <td><code>getSchemas()</code></td>
+              <td>Agent Loop 创建请求时</td>
+            </tr>
+            <tr>
+              <td>执行工具</td>
+              <td><code>execute(name, args)</code></td>
+              <td>Agent Loop 收到 function_call 时</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="callout accent">
+          <strong>核心原则</strong>：工具执行<strong>永远不抛异常</strong>。
+          成功返回结果字符串，失败返回错误描述字符串——两种都是给模型看的内容。
+          模型收到 "Error: file not found" 后可以自己决定重试、换参数、或告诉用户。
+        </div>
+      </section>
+
+      <section>
+        <h2>3. 第一个真工具：Todo CRUD</h2>
+        <p>
+          用本地 JSON 文件做存储（<code>todos.json</code>），提供 4 个操作：
+        </p>
+
+        <table>
+          <thead>
+            <tr><th>工具名</th><th>参数</th><th>功能</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>todo_add</code></td><td>title, description?</td><td>添加待办，返回新增任务的 id</td></tr>
+            <tr><td><code>todo_list</code></td><td>status?</td><td>列出待办，可按状态筛选</td></tr>
+            <tr><td><code>todo_complete</code></td><td>id</td><td>标记待办为已完成</td></tr>
+            <tr><td><code>todo_delete</code></td><td>id</td><td>删除待办</td></tr>
+          </tbody>
+        </table>
+
+        <p>每个工具的执行逻辑都一样：</p>
+        <ol>
+          <li>校验参数（类型、必填）</li>
+          <li>读写 <code>todos.json</code></li>
+          <li>成功返回描述字符串 / 失败返回 <code>"Error: ..."</code></li>
+        </ol>
+      </section>
+
+      <section>
+        <h2>4. 错误转信息：模型的"第二双眼"</h2>
+        <p>比较两种错误处理：</p>
+
+        <div class="grid-2">
+          <div class="card gap">
+            <span class="badge gap">throw（坏）</span>
+            <pre style="background: none; padding: 0.5rem 0 0 0; margin: 0"><code>if (!params.title) {
+  throw new Error('Missing title');
+}
+// Agent 崩了，不知道原因</code></pre>
+          </div>
+          <div class="card ok">
+            <span class="badge ok">return error string（好）</span>
+            <pre style="background: none; padding: 0.5rem 0 0 0; margin: 0"><code>if (!params.title) {
+  return 'Error: title is required';
+}
+// 模型收到错误，可以：
+// "I need a title. What task do you want to add?"</code></pre>
+          </div>
+        </div>
+
+        <p style="margin-top: 0.75rem">
+          返回错误字符串后，Agent Loop 照常把它作为 <code>function_call_output</code>
+          传给模型。模型看到错误后<strong>自己决定下一步</strong>——这正是 Agent 自主性的体现。
+        </p>
+
+        <div class="callout warn">
+          <strong>注意</strong>：不是所有错误都应该给模型看。内部错误（文件系统崩溃、内存不足）
+          可以 catch 后返回一个模糊的描述 + 记日志，避免泄露系统细节。
+        </div>
+      </section>
+
+      <section>
+        <h2>5. Loop 接入注册表</h2>
+        <p>
+          <code>loop.ts</code> 只需改两处：用 <code>registry.getSchemas()</code> 替代硬编码的
+          <code>tools</code> 数组，用 <code>registry.execute(name, args)</code> 替代
+          <code>executeTool(functionCall)</code>。
+        </p>
+
+        <div class="card">
+          <pre style="background: none; padding: 0; margin: 0"><code>// Before
+const response = await client.responses.create({ tools, /* ... */ });
+const output = await executeTool(functionCall);
+
+// After
+const response = await client.responses.create({
+  tools: registry.getSchemas(), /* ... */
+});
+const output = await registry.execute(functionCall.name, JSON.parse(functionCall.arguments));</code></pre>
+        </div>
+      </section>
+
+      <section>
+        <h2>6. 自检</h2>
+
+        <div class="card" data-quiz>
+          <p><strong>Q1</strong>：工具执行失败时，应该怎么做？</p>
+          <button data-correct="false">throw new Error，让 Agent 崩溃</button>
+          <button data-correct="true">返回 "Error: ..." 字符串给模型</button>
+          <button data-correct="false">catch 后静默跳过，什么都不返回</button>
+          <button data-correct="false">直接改参数重试，不给模型反馈</button>
+          <p class="feedback" data-feedback style="margin-top: 0.5rem; font-style: italic"></p>
+        </div>
+
+        <div class="card" data-quiz style="margin-top: 0.75rem">
+          <p><strong>Q2</strong>：工具注册表的核心职责是什么？</p>
+          <button data-correct="false">执行所有工具并返回最终答案</button>
+          <button data-correct="false">存储对话历史和上下文</button>
+          <button data-correct="true">集中管理工具 schema 和 execute，统一错误处理</button>
+          <button data-correct="false">直接调用 LLM API</button>
+          <p class="feedback" data-feedback style="margin-top: 0.5rem; font-style: italic"></p>
+        </div>
+
+        <div class="card" data-quiz style="margin-top: 0.75rem">
+          <p><strong>Q3</strong>：以下哪个属于本地 JSON Todo 工具的正常行为？</p>
+          <button data-correct="false">todo_add 不传 title 时自动生成标题</button>
+          <button data-correct="true">todo_list 无 status 参数时返回所有待办</button>
+          <button data-correct="false">todo_complete 重复标记已完成的任务时抛异常</button>
+          <button data-correct="false">todo_delete 删除不存在的 id 时中断 Agent Loop</button>
+          <p class="feedback" data-feedback style="margin-top: 0.5rem; font-style: italic"></p>
+        </div>
+      </section>
+
+      <section>
+        <h2>7. 主阅读</h2>
+        <p>
+          <a href="https://www.anthropic.com/engineering/writing-tools-for-agents" target="_blank" rel="noopener">
+            Anthropic: Writing effective tools for agents
+          </a>
+          — 工具命名、描述、错误处理、评测的最佳实践。虽然是 Anthropic 视角，但设计原则是通用的。
+        </p>
+      </section>
+
+      <section>
+        <h2>8. 练习</h2>
+        <ol>
+          <li>
+            <strong>理解注册表</strong>：通读 <code>src/tools/registry.ts</code> 和 <code>src/tools/todo.ts</code>，
+            确认你能解释 <code>register</code> / <code>getSchemas</code> / <code>execute</code> 各自职责。
+          </li>
+          <li>
+            <strong>加一个 todo_search 工具</strong>：参数 <code>keyword: string</code>，
+            返回标题或描述中包含关键词的任务列表。
+          </li>
+          <li>
+            运行 <code>bun run src/main.ts</code> 并制造一个错误场景（比如 todo_complete 一个不存在的 id），
+            观察 Agent 如何响应错误。
+          </li>
+        </ol>
+      </section>
+
+      <nav class="lesson-nav">
+        <a href="./0004-streaming-and-session.html">← 上一课: 0004 流式与会话</a>
+        <a href="../CURRICULUM.md" class="nav-index">课程索引</a>
+        <a href="./0006-structured-planning.html">下一课: 0006 结构化计划 →</a>
+      </nav>
+
+      <footer class="lesson-footer">
+        <p>
+          <strong>工具注册表跑不通？</strong>——贴你的 <code>registry.ts</code> + 报错，我帮你排查。
+        </p>
+        <p>
+          相关文件：
+          <a href="../CURRICULUM.md">CURRICULUM.md</a> ·
+          <a href="../reference/tool-design-patterns.html">工具设计速查</a> ·
+          <a href="../reference/glossary.html">术语表</a>
+        </p>
+      </footer>
+    </div>
+
+    <script>
+      (() => {
+        const html = document.documentElement;
+        const btn = document.getElementById('themeToggle');
+        const saved = localStorage.getItem('theme');
+        if (saved) html.dataset.theme = saved;
+        const icons = { auto: '◐', light: '☀', dark: '☾' };
+        const update = () => { btn.textContent = icons[html.dataset.theme || 'auto']; };
+        update();
+        btn.addEventListener('click', () => {
+          const t = html.dataset.theme;
+          const next = !t || t === 'auto' ? 'light' : t === 'light' ? 'dark' : 'auto';
+          html.dataset.theme = next === 'auto' ? '' : next;
+          if (next === 'auto') { localStorage.removeItem('theme'); delete html.dataset.theme; }
+          else localStorage.setItem('theme', next);
+          update();
+        });
+      })();
+      document.querySelectorAll("[data-quiz]").forEach((quiz) => {
+        const feedback = quiz.querySelector("[data-feedback]");
+        const buttons = [...quiz.querySelectorAll("button")];
+        buttons.forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const correct = btn.dataset.correct === "true";
+            buttons.forEach((b) => {
+              b.disabled = true;
+              if (b.dataset.correct === "true") b.classList.add("correct");
+            });
+            if (!correct) btn.classList.add("wrong");
+            if (feedback) {
+              feedback.textContent = correct ? "正确。" : "再想想。";
+            }
+          });
+        });
+      });
+    </script>
+  </body>
+</html>

@@ -15,15 +15,15 @@
 | L1  | 文本生成 + instructions | ✅ 已会   | `TextGeneration.ts`                                                  |
 | L2  | 结构化输出 (Zod)         | ✅ 已会   | `StructuredOutput.ts`（含 stream / refusal）                            |
 | L3  | 单轮 Tool Calling     | ✅ 已会   | `getHoroscopeFunctionCalling`                                        |
-| L4  | 流式 Tool + 会话衔接      | 🟡 部分会 | `getWeatherFunctionCalling` + `previous_response_id`；custom tool 刚开始 |
-| L5  | **完整 Agent Loop**   | ❌ 缺口   | 还没有「while 有 tool call 就继续」直到完成                                       |
-| L6  | 工具工程（真实副作用、错误、并行）   | ❌ 缺口   | 工具返回多为 mock 字符串                                                      |
-| L7  | 会话记忆与上下文管理          | ❌ 缺口   | 仅有 `previous_response_id` 雏形                                         |
+| L4  | 流式 Tool + 会话衔接      | ✅ 已会   | `getWeatherFunctionCalling` + `previous_response_id`；custom tool；课程 0004 |
+| L5  | **完整 Agent Loop**   | ✅ 已会   | `src/Agent/loop.ts`（maxSteps、结束条件、轨迹日志）+ `src/Agent/trajectory.ts`       |
+| L6  | 工具工程（真实副作用、错误、并行）   | ✅ 已会   | `src/tools/` 注册表 + Todo CRUD；错误返回字符串不抛异常 |
+| L7  | 会话记忆与上下文管理          | 🔄 进行中  | 课程 0007 已讲；需自写 session.ts + 改造 loop.ts                                |
 | L8  | 可靠性（护栏、日志、重试、评测）    | ❌ 缺口   | —                                                                    |
 | L9  | 可演示的生产力 Agent 作品    | ❌ 目标   | Mission 的交付物                                                         |
 
 
-**一句话**：你已经会「模型 ↔ 工具」的**单步握手**；Agent 开发的分水岭是把单步变成**可控的多步系统**。
+**一句话**：Agent 核心骨架已就位（loop + 工具注册表 + 计划轨迹）。下一个分水岭是把**无状态 run** 变成**可恢复会话**。
 
 ### 各选项到底有多难？（对应你问卷里的困惑）
 
@@ -78,21 +78,21 @@
 
 
 
-### 第 1 周 — Agent 是什么 + 写出第一个 Loop
+### 第 1 周 — Agent 是什么 + 写出第一个 Loop ✅
 
 **技能**：把单轮 tool calling 升级为 `runAgent(input)`  
 **产出**：`src/agent/loop.ts` — `maxSteps`、结束条件、轨迹日志  
 **主阅读**：[Function calling](https://developers.openai.com/api/docs/guides/function-calling) + [Building effective agents](https://www.anthropic.com/engineering/building-effective-agents) 前半  
 **验收**：同一会话内可连续调用 ≥2 次工具并给出最终自然语言答案
 
-### 第 2 周 — 工具工程
+### 第 2 周 — 工具工程 ✅
 
 **技能**：工具注册表、参数校验、失败可重试、并行 tool calls  
 **产出**：`src/tools/`* + 至少 2 个「真有用」的工具（文件读写 / HTTP / 本地 JSON 待办库 等）  
 **主阅读**：[Writing effective tools for agents](https://www.anthropic.com/engineering/writing-tools-for-agents)  
 **验收**：工具失败时 Agent 不崩；能向用户解释失败原因
 
-### 第 3 周 — 指令、计划与结构化中间状态
+### 第 3 周 — 指令、计划与结构化中间状态 ✅
 
 **技能**：system/instructions 设计；用 Zod 强制「计划 → 行动 → 总结」  
 **产出**：任务规划 schema + 执行轨迹可视化（console 或简单 markdown 报告）  
@@ -157,8 +157,10 @@
 | 0001 | 进度地图与学习路线                        | ✅ 本课   |
 | 0002 | Agent Loop：从单轮 tool 到 `runAgent` | ✅ 本课 |
 | 0003 | 工具设计：schema、描述、错误面 | ✅ 本课 |
-| 0004 | 结构化计划与轨迹                         | 待定     |
-| 0005 | 会话状态与上下文压缩                       | 待定     |
+| 0004 | 流式调用与会话衔接 | ✅ 本课 |
+| 0005 | 工具注册表与真实工具：从 switch-case 到可插拔轨道 | ✅ 本课 |
+| 0006 | 结构化计划与轨迹：instructions 驱动 plan-before-act | ✅ 本课 |
+| 0007 | 会话状态与上下文压缩                       | 🔄 本课  |
 | …    | 对齐周课表继续拆                         |        |
 
 

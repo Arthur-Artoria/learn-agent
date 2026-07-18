@@ -21,6 +21,10 @@
 - 每课必须包含 theme toggle 按钮和对应 JS（复制已有课程的 pattern）
 - 课程编号递增（`0001-`, `0002-`, ...），文件名用 dash-case
 
+## Environment constraints
+- llm provider is DeepSeek (via GODEX_BASE_URL proxy); OpenAI built-in tools (web_search_preview, code_interpreter, file_search) are NOT supported. Only `type: 'function'` tools work.
+- `web_search_preview` was tested in L4 but removed due to this constraint; keep as conceptual knowledge only.
+
 ## Teaching posture
 - 先巩固「API 原语 → Agent 原语」的映射，再选生产力场景做 MVP
 - 面试叙事：不是「调了几个 API」，而是「我能把不可靠的模型调用收成可控系统」

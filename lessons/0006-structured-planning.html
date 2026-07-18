@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>0006 · 结构化计划与轨迹 · learn-agent</title>
+    <link rel="stylesheet" href="../assets/styles.css" />
+  </head>
+  <body>
+    <button class="theme-toggle" id="themeToggle" title="切换主题" aria-label="切换主题">☀</button>
+    <div class="page">
+      <header class="hero">
+        <p class="eyebrow">Lesson 0006 · 第 3 周</p>
+        <h1>结构化计划与轨迹：让 Agent 先想清楚再动手</h1>
+        <p class="lede">
+          L5 的 Agent Loop 会跑了，L6 的工具能写文件了。但遇到「帮我规划本周任务」这种复杂请求时，
+          模型是一边想一边干的——结果可能是漏步骤、重复操作、或者说不清自己干了什么。
+          这一课教两件事：<strong>用 instructions 强制先计划再行动</strong>，以及
+          <strong>把 loop 的轨迹变成可读的执行报告</strong>。
+        </p>
+        <div class="meta">
+          <span>约 12–15 分钟</span>
+          <span>前置：L5 Agent Loop + L6 工具工程</span>
+          <span><a href="../reference/glossary.html">术语表</a></span>
+        </div>
+      </header>
+
+      <section>
+        <h2>1. 两种 Agent 思维模式</h2>
+
+        <div class="grid-2">
+          <div class="card gap">
+            <span class="badge gap">反应式（L5 现状）</span>
+            <pre style="background: none; padding: 0.5rem 0 0 0; margin: 0"><code>用户: "规划本周任务"
+模型: 调用 todo_add("写周报")
+模型: 调用 todo_add("开会")
+模型: 调用 todo_list()
+模型: "我帮你加了写周报和开会"
+// 问题：没有全局视角，
+// 可能漏掉重要任务，
+// 用户不知道它到底做了什么</code></pre>
+          </div>
+          <div class="card ok">
+            <span class="badge ok">计划驱动（目标）</span>
+            <pre style="background: none; padding: 0.5rem 0 0 0; margin: 0"><code>用户: "规划本周任务"
+模型: "我来分析一下：
+      1. 先看现有待办
+      2. 补充本周必做项
+      3. 按优先级排列"
+模型: todo_list()
+模型: todo_add("写周报")
+模型: todo_add("项目评审")
+模型: "已完成规划，新增2项..."
+// 用户能看到逻辑链条</code></pre>
+          </div>
+        </div>
+
+        <p style="margin-top: 1rem">
+          区别不是「有没有用工具」，而是模型<strong>在动手前是否先输出了一个可审计的计划</strong>。
+          这个计划让用户和开发者都能理解 Agent 在做什么、为什么这样做。
+        </p>
+      </section>
+
+      <section>
+        <h2>2. 用 instructions 驱动计划行为</h2>
+        <p>
+          <code>runAgent</code> 已经有 <code>instructions</code> 参数（<code>loop.ts:45</code>）。
+          关键是写<strong>什么样的 instruction 能稳定产出计划</strong>：
+        </p>
+
+        <div class="card accent">
+          <pre style="background: none; padding: 0; margin: 0"><code>const instructions = `你是一个任务管理助手。对于任何涉及 2 个及以上操作的请求，
+你必须遵循以下流程：
+
+1. **分析**：先理解用户意图，列出需要哪些步骤
+2. **执行**：按步骤依次调用工具，每步完成后确认结果
+3. **总结**：最后汇总做了什么、结果如何、是否有遗留问题
+
+在开始执行前，先用文字输出你的计划。
+如果某一步失败，说明失败原因并尝试替代方案。`;</code></pre>
+        </div>
+
+        <p style="margin-top: 0.75rem"><strong>三条 instruction 设计原则</strong>：</p>
+        <ol>
+          <li><strong>具体而非笼统</strong>：别说"好好干"，说"先 X 再 Y 最后 Z"</li>
+          <li><strong>给失败预案</strong>：告诉模型工具失败时该怎么做（重试？跳过？问用户？）</li>
+          <li><strong>约束输出格式</strong>：让模型用编号、小节等结构化方式输出，方便人读</li>
+        </ol>
+
+        <div class="callout">
+          <strong>面试加分点</strong>：当面试官问「你怎么确保 Agent 行为可预测」时，
+          答案不是"调 temperature"，而是"在 instructions 里约束行为模式，并用 trajectory 验证"。
+        </div>
+      </section>
+
+      <section>
+        <h2>3. 轨迹可视化：让黑盒变白盒</h2>
+        <p>
+          你现在的 <code>runAgent</code> 返回 <code>trajectory</code>（每一步的 output 数组），
+          但直接 <code>console.log</code> 是一大坨 JSON。把它格式化成可读报告：
+        </p>
+
+        <div class="card">
+          <pre style="background: none; padding: 0; margin: 0"><code>// 格式化 tool call
+🔧 todo_add({ title: "买牛奶" })
+  → 已添加待办: [todo_xxx] 买牛奶
+
+// 格式化工具错误
+🔧 todo_complete({ id: "bad_id" })
+  ❌ Error: 未找到 id 为 "bad_id" 的待办事项
+
+// 格式化模型消息
+💬 已添加 3 条待办，目前共 5 条...</code></pre>
+        </div>
+
+        <p style="margin-top: 0.75rem">
+          一个好的 trajectory 报告回答三个问题：
+          <strong>Agent 做了什么</strong>（工具调用序列）、
+          <strong>每一步结果如何</strong>（成功/失败/数据）、
+          <strong>为什么这样做</strong>（模型在每个决策点的推理）。
+        </p>
+
+        <div class="callout accent">
+          <strong>这不是花活，是工程需求</strong>：当 Agent 行为异常时，
+          trajectory 是你唯一能还原现场的东西。没有它，你只能猜。
+        </div>
+      </section>
+
+      <section>
+        <h2>4. 自检</h2>
+
+        <div class="card" data-quiz>
+          <p><strong>Q1</strong>：计划驱动 vs 反应式的核心区别是什么？</p>
+          <button data-correct="false">计划驱动用更多工具</button>
+          <button data-correct="true">计划驱动在动手前输出可审计的执行计划</button>
+          <button data-correct="false">计划驱动速度更快</button>
+          <button data-correct="false">计划驱动不需要 maxSteps 限制</button>
+          <p class="feedback" data-feedback style="margin-top: 0.5rem; font-style: italic"></p>
+        </div>
+
+        <div class="card" data-quiz style="margin-top: 0.75rem">
+          <p><strong>Q2</strong>：instruction 设计的三原则不包括哪一条？</p>
+          <button data-correct="false">具体而非笼统</button>
+          <button data-correct="false">给失败预案</button>
+          <button data-correct="true">必须用英文编写</button>
+          <button data-correct="false">约束输出格式</button>
+          <p class="feedback" data-feedback style="margin-top: 0.5rem; font-style: italic"></p>
+        </div>
+
+        <div class="card" data-quiz style="margin-top: 0.75rem">
+          <p><strong>Q3</strong>：trajectory 报告不回答哪个问题？</p>
+          <button data-correct="false">Agent 做了什么</button>
+          <button data-correct="false">每一步结果如何</button>
+          <button data-correct="false">为什么这样做</button>
+          <button data-correct="true">模型用了多少 token 费用</button>
+          <p class="feedback" data-feedback style="margin-top: 0.5rem; font-style: italic"></p>
+        </div>
+      </section>
+
+      <section>
+        <h2>5. 练习</h2>
+        <ol>
+          <li>
+            <strong>写一套 instructions</strong>：在 <code>main.ts</code> 里给 <code>runAgent</code>
+            传入符合三原则的 instructions，让 Agent 在处理多步任务时先输出计划。
+          </li>
+          <li>
+            <strong>实现 trajectory 格式化函数</strong>：在 <code>src/Agent/</code> 下新建
+            <code>trajectory.ts</code>，把 <code>trajectory</code> 数组格式化为可读报告。
+            区分 function_call、function_call_output、message 三种输出类型。
+          </li>
+          <li>
+            用一个包含 3+ 步骤的请求验证（如「分析我的待办、补充遗漏项、按优先级排序」），
+            确认输出中包含清晰的计划 + 轨迹报告。
+          </li>
+        </ol>
+      </section>
+
+      <nav class="lesson-nav">
+        <a href="./0005-tool-registry.html">← 上一课: 0005 工具注册表</a>
+        <a href="../CURRICULUM.md" class="nav-index">课程索引</a>
+        <a href="./0007-session-and-context.html">下一课: 0007 会话状态与上下文压缩 →</a>
+      </nav>
+
+      <footer class="lesson-footer">
+        <p>
+          <strong>Instructions 效果不稳定？</strong>——贴你的 instructions + 模型实际输出，我帮你迭代。
+        </p>
+        <p>
+          相关文件：
+          <a href="../CURRICULUM.md">CURRICULUM.md</a> ·
+          <a href="../reference/glossary.html">术语表</a>
+        </p>
+      </footer>
+    </div>
+
+    <script>
+      (() => {
+        const html = document.documentElement;
+        const btn = document.getElementById('themeToggle');
+        const saved = localStorage.getItem('theme');
+        if (saved) html.dataset.theme = saved;
+        const icons = { auto: '◐', light: '☀', dark: '☾' };
+        const update = () => { btn.textContent = icons[html.dataset.theme || 'auto']; };
+        update();
+        btn.addEventListener('click', () => {
+          const t = html.dataset.theme;
+          const next = !t || t === 'auto' ? 'light' : t === 'light' ? 'dark' : 'auto';
+          html.dataset.theme = next === 'auto' ? '' : next;
+          if (next === 'auto') { localStorage.removeItem('theme'); delete html.dataset.theme; }
+          else localStorage.setItem('theme', next);
+          update();
+        });
+      })();
+      document.querySelectorAll("[data-quiz]").forEach((quiz) => {
+        const feedback = quiz.querySelector("[data-feedback]");
+        const buttons = [...quiz.querySelectorAll("button")];
+        buttons.forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const correct = btn.dataset.correct === "true";
+            buttons.forEach((b) => {
+              b.disabled = true;
+              if (b.dataset.correct === "true") b.classList.add("correct");
+            });
+            if (!correct) btn.classList.add("wrong");
+            if (feedback) {
+              feedback.textContent = correct ? "正确。" : "再想想。";
+            }
+          });
+        });
+      });
+    </script>
+  </body>
+</html>

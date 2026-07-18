@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>0004 · 流式调用与会话衔接 · learn-agent</title>
+    <link rel="stylesheet" href="../assets/styles.css" />
+  </head>
+  <body>
+    <button class="theme-toggle" id="themeToggle" title="切换主题" aria-label="切换主题">☀</button>
+    <div class="page">
+      <header class="hero">
+        <p class="eyebrow">Lesson 0004 · L4 补完</p>
+        <h1>流式调用与会话衔接：连接单步和循环的胶水</h1>
+        <p class="lede">
+          L3 你会了"调一次模型、执行工具、再调一次"。L5 你会了 while 循环。但中间少了一环：
+          <strong>模型输出是逐 token 流回来的，工具调用也在流里</strong>——你得知道怎么拆流、怎么用
+          <code>previous_response_id</code> 把多轮串成对话，以及除了 function tool 还有哪些工具类型。
+        </p>
+        <div class="meta">
+          <span>约 12–18 分钟</span>
+          <span>前置：L0–L3（已掌握）</span>
+          <span><a href="../reference/glossary.html">术语表</a></span>
+          <span><a href="../reference/agent-loop-pattern.html">Agent Loop 速查</a></span>
+        </div>
+      </header>
+
+      <section>
+        <h2>1. 流式调用解决什么问题</h2>
+        <p>
+          非流式调用（<code>stream: false</code>）下，你必须等模型完全生成完才能拿到 output。这意味着：
+        </p>
+        <ul>
+          <li>用户盯着空白画面等几秒 → 体验差</li>
+          <li>你不知道模型要调哪个工具，直到 response 全返回来 → 不能边收边决定</li>
+          <li>每次调用的 response.id 是 <code>stream: false</code> 也会返回的 —— 关键是流式中你<strong>必须</strong>从事件流里拿到它</li>
+        </ul>
+        <p>
+          流式调用（<code>stream: true</code>）把模型输出拆成事件序列。你库里的
+          <code>getWeatherFunctionCalling</code> 就是标准范例——我们逐帧看它做了什么。
+        </p>
+
+        <h3>四个关键事件</h3>
+        <div class="card ok" style="margin-top: 0.75rem">
+          <pre style="background: none; padding: 0; margin: 0"><code>const stream = await client.responses.create({
+  model: 'gpt-5.4-mini', input, tools,
+  stream: true,   // ← 关键开关
+  store: true,    // ← 流式下 store 才能拿到 previous_response_id
+});
+
+for await (const event of stream) {
+  // ① response.created       → 拿到 response.id，存到变量里
+  // ② response.output_item.done → function_call 的完整信息（name + arguments + call_id）
+  // ③ response.content_part.done / output_text.delta → 文本输出（流式输出时可逐字显示）
+  // ④ response.completed      → 流结束，response.output_text 可用
+}</code></pre>
+        </div>
+
+        <table>
+          <thead>
+            <tr><th>事件</th><th>携带什么</th><th>你用它做什么</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>response.created</code></td>
+              <td><code>event.response.id</code></td>
+              <td>记下 response_id，后续用 <code>previous_response_id</code> 续接</td>
+            </tr>
+            <tr>
+              <td><code>response.output_item.done</code></td>
+              <td><code>event.item</code>（类型为 <code>function_call</code>）</td>
+              <td>拿到 <code>name</code> + <code>arguments</code> + <code>call_id</code>，执行工具</td>
+            </tr>
+            <tr>
+              <td><code>response.output_text.delta</code></td>
+              <td><code>event.delta</code></td>
+              <td>逐字显示输出（可选，后续可加）</td>
+            </tr>
+            <tr>
+              <td><code>response.completed</code></td>
+              <td><code>event.response</code>（完整对象）</td>
+              <td>确认响应结束，取 <code>output_text</code></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="callout warn">
+          <strong>注意</strong>：<code>stream: true</code> 时必须同时 <code>store: true</code>，
+          否则 <code>previous_response_id</code> 无法用于后续请求——流式响应默认不存储。
+        </div>
+      </section>
+
+      <section>
+        <h2>2. previous_response_id：多轮会话的钩子</h2>
+        <p>
+          你库里的 <code>getWeatherFunctionCalling</code> 分了两步：
+        </p>
+        <ol>
+          <li>第一次流式调用：模型输出 function_call，你执行工具，收集 <code>function_call_output</code></li>
+          <li>第二次流式调用：带上 <code>previous_response_id: responseId</code>，模型根据工具结果生成最终答案</li>
+        </ol>
+
+        <div class="grid-2">
+          <div class="card">
+            <span class="badge">手动拼接 input</span>
+            <pre style="background: none; padding: 0.5rem 0 0 0; margin: 0"><code>// L3 方式：自己 push 历史
+input.push(functionCall);
+input.push(functionCallOutput);
+await client.responses.create({ input });</code></pre>
+          </div>
+          <div class="card accent">
+            <span class="badge accent">previous_response_id</span>
+            <pre style="background: none; padding: 0.5rem 0 0 0; margin: 0"><code>// previous_response_id 方式
+await client.responses.create({
+  input: functionCallOutputs,
+  previous_response_id: responseId,
+});
+// 平台替你维护对话历史</code></pre>
+          </div>
+        </div>
+
+        <p style="margin-top: 1rem">两者的区别：</p>
+        <table>
+          <thead>
+            <tr><th></th><th>手动拼接 input</th><th>previous_response_id</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>控制力</td>
+              <td>你完全控制上下文</td>
+              <td>平台接管，你只管增量</td>
+            </tr>
+            <tr>
+              <td>心智负担</td>
+              <td>自己维护历史数组</td>
+              <td>只传本轮新增内容</td>
+            </tr>
+            <tr>
+              <td>适用场景</td>
+              <td>需要裁剪/修改历史时</td>
+              <td>简单串联多轮时</td>
+            </tr>
+            <tr>
+              <td>Agent Loop 中</td>
+              <td>✅ 常见：每步 push output + tool result</td>
+              <td>⚠️ 不推荐循环内用（无法插入/查看历史）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="callout">
+          <strong>一句话决策</strong>：Agent Loop 内部用<strong>手动拼接 input</strong>（透明度最高）；
+          简单多轮对话/原型阶段用 <code>previous_response_id</code>（代码最少）。
+        </div>
+      </section>
+
+      <section>
+        <h2>3. 不止 function tool：内置工具一览</h2>
+        <p>
+          你目前只用了 <code>type: 'function'</code>。OpenAI 还提供了内置工具，不需要你写执行逻辑：
+        </p>
+
+        <table>
+          <thead>
+            <tr><th>工具类型</th><th>type 值</th><th>用途</th><th>你需要做什么</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>函数工具</td>
+              <td><code>'function'</code></td>
+              <td>你定义 + 你执行的自定义工具</td>
+              <td>写 schema + 写执行逻辑</td>
+            </tr>
+            <tr>
+              <td>网页搜索</td>
+              <td><code>'web_search_preview'</code></td>
+              <td>让模型实时搜索网络</td>
+              <td>只定义工具，不写执行逻辑</td>
+            </tr>
+            <tr>
+              <td>代码执行</td>
+              <td><code>'code_interpreter'</code></td>
+              <td>沙箱里跑 Python</td>
+              <td>只定义工具，不写执行逻辑</td>
+            </tr>
+            <tr>
+              <td>文件搜索</td>
+              <td><code>'file_search'</code></td>
+              <td>搜索上传的文件</td>
+              <td>先上传文件到 vector store</td>
+            </tr>
+            <tr>
+              <td>MCP</td>
+              <td><code>'mcp'</code></td>
+              <td>连接外部 MCP 服务器</td>
+              <td>配置 MCP 连接信息</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="card ok">
+          <pre style="background: none; padding: 0; margin: 0"><code>// 内置工具示例（不需 executeTool）
+{
+  type: 'web_search_preview',
+  user_location: { type: 'approximate', city: '深圳' },
+  search_context_size: 'medium',
+}</code></pre>
+        </div>
+
+        <p style="margin-top: 0.75rem">
+          内置工具的关键区别：模型调用后，平台自动执行并返回结果——你不需要拦截
+          <code>function_call</code> 然后自己跑。但这也意味着你<strong>不能</strong>对执行结果做校验或转换。
+          对于生产力 Agent，核心业务工具还是用 <code>function</code> 类型，辅助信息获取可用内置工具。
+        </p>
+      </section>
+
+      <section>
+        <h2>4. 流式 + Agent Loop：该不该合并？</h2>
+        <p>
+          你的 <code>src/Agent/loop.ts</code> 目前用非流式（<code>stream: false</code>）。
+          如果要改成流式，核心循环会变成这样：
+        </p>
+
+        <div class="card">
+          <pre style="background: none; padding: 0; margin: 0"><code>while (steps < maxSteps) {
+  const stream = client.responses.create({ stream: true, /* ... */ });
+  let responseId = '';
+  const toolCalls: FunctionCallItem[] = [];
+  for await (const event of stream) {
+    if (event.type === 'response.created') responseId = event.response.id;
+    if (event.type === 'response.output_item.done' && event.item.type === 'function_call')
+      toolCalls.push(event.item);
+    if (event.type === 'response.output_text.delta')
+      process.stdout.write(event.delta);  // 实时输出
+  }
+  if (toolCalls.length === 0) break;
+  // 执行工具，push 结果...
+}</code></pre>
+        </div>
+
+        <p style="margin-top: 0.75rem">
+          <strong>建议</strong>：非流式 Agent Loop 先跑稳，再加流式。流式增加的复杂度（事件分发、多 tool 并行等）
+          不是 L5 的核心问题。L4 的掌握标准是：<strong>能写一个流式 tool calling demo，
+          并解释每个事件的作用</strong>，不必着急把 Loop 全改成流式。
+        </p>
+      </section>
+
+      <section>
+        <h2>5. 自检</h2>
+
+        <div class="card" data-quiz>
+          <p><strong>Q1</strong>：在流式 tool calling 中，<code>function_call</code> 的信息出现在哪个事件里？</p>
+          <button data-correct="false">response.completed</button>
+          <button data-correct="true">response.output_item.done</button>
+          <button data-correct="false">response.created</button>
+          <button data-correct="false">response.output_text.delta</button>
+          <p class="feedback" data-feedback style="margin-top: 0.5rem; font-style: italic"></p>
+        </div>
+
+        <div class="card" data-quiz style="margin-top: 0.75rem">
+          <p><strong>Q2</strong>：以下哪个场景最适合用 <code>previous_response_id</code>？</p>
+          <button data-correct="false">Agent Loop 中间的每一步</button>
+          <button data-correct="false">需要裁剪对话历史时</button>
+          <button data-correct="true">简单多轮对话中串联两次调用</button>
+          <button data-correct="false">工具执行失败需要重试时</button>
+          <p class="feedback" data-feedback style="margin-top: 0.5rem; font-style: italic"></p>
+        </div>
+
+        <div class="card" data-quiz style="margin-top: 0.75rem">
+          <p><strong>Q3</strong>：流式调用必须同时设置哪个参数，<code>previous_response_id</code> 才能正常工作？</p>
+          <button data-correct="false">stream: false</button>
+          <button data-correct="false">max_output_tokens</button>
+          <button data-correct="true">store: true</button>
+          <button data-correct="false">temperature: 0</button>
+          <p class="feedback" data-feedback style="margin-top: 0.5rem; font-style: italic"></p>
+        </div>
+      </section>
+
+      <section>
+        <h2>6. 练习</h2>
+        <ol>
+          <li>
+            <strong>改造 <code>getHoroscopeFunctionCalling</code></strong>：
+            把它从非流式改成流式，用 <code>previous_response_id</code> 续接第二轮——
+            就像 <code>getWeatherFunctionCalling</code> 那样。在 <code>main.ts</code> 里跑起来确认。
+          </li>
+          <li>
+            <strong>加一个 web_search_preview 工具</strong>：
+            在 tools 数组里追加一个 <code>{type: 'web_search_preview'}</code>，
+            问模型一个问题让它去搜索，观察 output 的结构。
+          </li>
+          <li>下一会话对我说：<strong>「检查我的流式改写」</strong>。</li>
+        </ol>
+      </section>
+
+      <nav class="lesson-nav">
+        <a href="./0003-tool-design.html">← 上一课: 0003 工具设计</a>
+        <a href="../CURRICULUM.md" class="nav-index">课程索引</a>
+        <a href="./0005-tool-registry.html">下一课: 0005 工具注册表 →</a>
+      </nav>
+
+      <footer class="lesson-footer">
+        <p>
+          <strong>流式事件困惑？</strong>——贴你的 for await 循环 + 实际输出，我帮你排 bug。
+        </p>
+        <p>
+          相关文件：
+          <a href="../CURRICULUM.md">CURRICULUM.md</a> ·
+          <a href="../reference/glossary.html">术语表</a> ·
+          <a href="../reference/agent-loop-pattern.html">Agent Loop 速查</a>
+        </p>
+      </footer>
+    </div>
+
+    <script>
+      (() => {
+        const html = document.documentElement;
+        const btn = document.getElementById('themeToggle');
+        const saved = localStorage.getItem('theme');
+        if (saved) html.dataset.theme = saved;
+        const icons = { auto: '◐', light: '☀', dark: '☾' };
+        const update = () => { btn.textContent = icons[html.dataset.theme || 'auto']; };
+        update();
+        btn.addEventListener('click', () => {
+          const t = html.dataset.theme;
+          const next = !t || t === 'auto' ? 'light' : t === 'light' ? 'dark' : 'auto';
+          html.dataset.theme = next === 'auto' ? '' : next;
+          if (next === 'auto') { localStorage.removeItem('theme'); delete html.dataset.theme; }
+          else localStorage.setItem('theme', next);
+          update();
+        });
+      })();
+      document.querySelectorAll("[data-quiz]").forEach((quiz) => {
+        const feedback = quiz.querySelector("[data-feedback]");
+        const buttons = [...quiz.querySelectorAll("button")];
+        buttons.forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const correct = btn.dataset.correct === "true";
+            buttons.forEach((b) => {
+              b.disabled = true;
+              if (b.dataset.correct === "true") b.classList.add("correct");
+            });
+            if (!correct) btn.classList.add("wrong");
+            if (feedback) {
+              feedback.textContent = correct ? "正确。" : "再想想。";
+            }
+          });
+        });
+      });
+    </script>
+  </body>
+</html>

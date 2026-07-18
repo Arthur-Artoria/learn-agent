@@ -64,33 +64,44 @@ export const executeTool = async (functionCall: ResponseFunctionToolCall) => {
 export const getHoroscopeFunctionCalling = async (client: OpenAI) => {
   // 2. 创建一个响应配置，指定模型、输入和工具
   const input: ResponseInputItem[] = [{ role: 'user', content: '今天金牛座的运势如何？' }];
-  const response = await client.responses.create({ model: 'gpt-5.4-mini', input, tools });
+  const finalTooCalls: ResponseInputItem.FunctionCallOutput[] = [];
+  const response = await client.responses.create({ model: 'gpt-5.4-mini', input, tools, stream: true, store: true });
 
-  // 3. 执行获取星座功能的工具调用
-  const functionCall = response.output.filter(
-    (item): item is ResponseFunctionToolCall => item.type === 'function_call' && item.name === 'get_horoscope',
-  );
-  const functionCallOutput = functionCall.map<ResponseInputItem.FunctionCallOutput>(item => ({
-    type: 'function_call_output',
-    call_id: item.call_id,
-    output: getHoroscope(JSON.parse(item.arguments).sign),
-  }));
+  let responseId = '';
 
-  // 4. 将原始响应和工具调用输出合并到输入中
-  input.push(...functionCall);
-  input.push(...functionCallOutput);
-  console.log('最终的输入：');
-  console.log(JSON.stringify(input, null, 2));
+  for await (const event of response) {
+    if (event.type === 'response.created') {
+      responseId = event.response.id;
+    }
 
-  // 5. 创建最终响应
+    if (event.type === 'response.output_item.done') { 
+      const outputItem = event.item;
+      if (outputItem.type === 'function_call' && outputItem.name === 'get_horoscope') { 
+        const output = getHoroscope(JSON.parse(outputItem.arguments).sign);
+        const functionCallOutput: ResponseInputItem.FunctionCallOutput = {
+          type: 'function_call_output',
+          output,
+          call_id: outputItem.call_id,
+        }
+        finalTooCalls.push(functionCallOutput);
+      }
+    }
+  }
+
   const finalResponse = await client.responses.create({
     model: 'gpt-5.4-mini',
-    input,
-    tools,
+    input: finalTooCalls,
+    stream: true,
+    store: true,
+    previous_response_id: responseId,
     instructions: '仅用工具生成的占星术来回应。',
-  });
-  console.log('最终的响应：');
-  console.log(finalResponse.output_text);
+  })
+
+  for await (const event of finalResponse) { 
+    if (event.type === 'response.completed') {
+      console.log(event.response.output_text);
+    }
+  }
 };
 
 export const getWeatherFunctionCalling = async (client: OpenAI) => {

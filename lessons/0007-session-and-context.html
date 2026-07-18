@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>0007 · 会话状态与上下文压缩 · learn-agent</title>
+    <link rel="stylesheet" href="../assets/styles.css" />
+  </head>
+  <body>
+    <button class="theme-toggle" id="themeToggle" title="切换主题" aria-label="切换主题">☀</button>
+    <div class="page">
+      <header class="hero">
+        <p class="eyebrow">Lesson 0007 · 第 4 周</p>
+        <h1>会话状态与上下文压缩：让 Agent 记住你是谁</h1>
+        <p class="lede">
+          L5 的 <code>runAgent</code> 每次都从零开始——它不记得上一轮说了什么、做了什么。
+          这一课解决两件事：<strong>如何在多次调用间保持对话连续性</strong>，以及
+          <strong>当对话太长时如何压缩而不丢失关键信息</strong>。
+        </p>
+        <div class="meta">
+          <span>约 15–20 分钟</span>
+          <span>前置：L5 Agent Loop + L6 工具工程</span>
+          <span><a href="../reference/glossary.html">术语表</a></span>
+        </div>
+      </header>
+
+      <section>
+        <h2>1. 每次见面都像第一次</h2>
+        <p>
+          打开 <code>src/Agent/loop.ts:27-32</code>，看 <code>currentInput</code> 的初始化：
+        </p>
+
+        <div class="card accent">
+          <pre style="background: none; padding: 0; margin: 0"><code>const currentInput: ResponseInput = [
+  {
+    role: 'user',
+    content: input,   // ── 永远只有当前这一条
+  },
+]</code></pre>
+        </div>
+
+        <p style="margin-top: 0.75rem">
+          这意味着三次独立的 <code>runAgent</code> 调用之间<strong>完全没有关联</strong>。
+          你问「帮我添加待办：买牛奶」，它加了。再问「我刚才让你加什么来着？」——它不知道。
+        </p>
+
+        <div class="callout">
+          <strong>这不是 bug，是当前架构的设计取舍</strong>：loop 是纯函数，输入决定输出。
+          无状态让测试和推理变得简单。但交付一个生产力工具，状态是必须的。
+        </div>
+      </section>
+
+      <section>
+        <h2>2. 两条路径：server-side 还是 client-side？</h2>
+
+        <table>
+          <tr>
+            <th></th>
+            <th><code>previous_response_id</code></th>
+            <th>自管 history（推荐）</th>
+          </tr>
+          <tr>
+            <td>原理</td>
+            <td>告诉 OpenAI "续接上一次响应"，平台替你记住历史</td>
+            <td>你自己在 <code>currentInput</code> 数组里维护所有历史消息</td>
+          </tr>
+          <tr>
+            <td>好处</td>
+            <td>一行代码，平台自动处理</td>
+            <td>完全透明可控；可序列化持久化；不绑平台</td>
+          </tr>
+          <tr>
+            <td>坑</td>
+            <td>黑盒——你看不到历史内容；换平台就丢；和 Loop 的 tool 拼接逻辑冲突</td>
+            <td>你要自己管理数组长度和 token 预算</td>
+          </tr>
+          <tr>
+            <td>适合</td>
+            <td>快速原型、简单 Chat UI</td>
+            <td><strong>Agent Loop（本课程路径）</strong></td>
+          </tr>
+        </table>
+
+        <p style="margin-top: 0.75rem">
+          你已在 L4 中用过 <code>previous_response_id</code>（<code>FunctionCalling.ts</code>），
+          也在 L5 中选择了手动拼接 input。现在要继续这个方向：<strong>维护一个跨调用的 conversation 数组</strong>。
+        </p>
+
+        <p>
+          核心思路：把 <code>runAgent</code> 的职责从「接收一条输入 → 返回结果」升级为
+          「接收一条输入 + 现有上下文 → 返回结果 + 更新后的上下文」。
+        </p>
+      </section>
+
+      <section>
+        <h2>3. Context Budget：对话不扣预算，迟早会炸</h2>
+
+        <p>
+          每轮对话追加 user message + assistant output + function_call + function_call_output……
+          数组<strong>只增不减</strong>。几十轮之后，你的 <code>currentInput</code> 可能有几万 token。
+        </p>
+
+        <div class="grid-2">
+          <div class="card gap">
+            <span class="badge gap">不控制</span>
+            <pre style="background: none; padding: 0.5rem 0 0 0; margin: 0"><code>第 50 轮:
+currentInput.length = 800
+→ 超出模型 context window
+→ API 报错或截断</code></pre>
+          </div>
+          <div class="card ok">
+            <span class="badge ok">有节制</span>
+            <pre style="background: none; padding: 0.5rem 0 0 0; margin: 0"><code>第 50 轮:
+currentInput.length = 30
+→ 始终在预算内
+→ 对话流畅，成本可控</code></pre>
+          </div>
+        </div>
+
+        <p style="margin-top: 1rem">
+          <strong>两个预算维度</strong>：一是模型最大 context window（硬上限，超了就报错），
+          二是实际成本（每 1K token 都花钱，历史越长越贵）。
+          好的 Agent 要同时控制两者。
+        </p>
+
+        <div class="sidenote">
+          DeepSeek 的 context window 通常为 128K token，但越靠近上限质量越差（lost-in-the-middle 效应）。
+          建议实际使用预算保持在 window 的 50–70% 以内。
+        </div>
+      </section>
+
+      <section>
+        <h2>4. 三种压缩策略</h2>
+
+        <p>
+          压缩的本质是<strong>用一个更短的表示替代一段历史</strong>，同时保留影响后续决策的关键信息。
+        </p>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.75rem; margin: 1rem 0;">
+          <div class="card">
+            <span class="badge accent">策略 A</span>
+            <h3 style="margin: 0.5rem 0; font-size: 1rem">滑动窗口 (Sliding Window)</h3>
+            <p style="font-size: 0.85rem; color: var(--muted); margin: 0">
+              只保留最近 N 条消息（如最近 20 条）。实现最简单，但会丢掉"对话开头你告诉我的偏好"这类远期信息。
+            </p>
+          </div>
+          <div class="card">
+            <span class="badge accent">策略 B</span>
+            <h3 style="margin: 0.5rem 0; font-size: 1rem">摘要压缩 (Summarization)</h3>
+            <p style="font-size: 0.85rem; color: var(--muted); margin: 0">
+              当对话超过阈值时，调用模型把早期对话压缩成一段摘要，用摘要替代原始消息。保留语义，丢失细节。
+            </p>
+          </div>
+          <div class="card ok">
+            <span class="badge ok">策略 C（推荐）</span>
+            <h3 style="margin: 0.5rem 0; font-size: 1rem">摘要 + 近期窗口</h3>
+            <p style="font-size: 0.85rem; color: var(--muted); margin: 0">
+              摘要保存远期背景，最近 N 条消息保持原样。兼顾长期记忆与短期精度。<strong>这是多数生产 Agent 的方案。</strong>
+            </p>
+          </div>
+        </div>
+
+        <p style="margin-top: 0.5rem"><strong>策略 C 的数据结构大致长这样：</strong></p>
+
+        <div class="card">
+          <pre style="background: none; padding: 0; margin: 0"><code>{
+  "summary": "用户叫小王，在做一个任务管理Agent。
+               之前讨论过用 JSON 文件做数据库。",
+  "recent": [
+    { "role": "user", "content": "添加待办：买牛奶" },
+    { "role": "assistant", "content": "..." },
+    { "type": "function_call", ... },
+    { "type": "function_call_output", ... },
+    // 最近 20 条保持原样
+  ]
+}</code></pre>
+        </div>
+
+        <p style="margin-top: 0.75rem">
+          每次追加新消息后检查：如果 <code>recent</code> 长度超过阈值，就用模型把最早的一批消息压缩进 <code>summary</code>，然后从 <code>recent</code> 里删掉它们。
+        </p>
+
+        <div class="callout accent">
+          <strong>面试加分点</strong>：当面试官问「你怎么处理长对话」，不要只说"用滑动窗口"。
+          讲清楚三种策略的 trade-off，以及你为什么选择摘要 + 窗口的混合方案——这说明你做的是工程决策，不是抄模板。
+        </div>
+      </section>
+
+      <section>
+        <h2>5. 自检</h2>
+
+        <div class="card" data-quiz>
+          <p><strong>Q1</strong>：当前 <code>runAgent</code> 为什么多轮调用之间互不记得？</p>
+          <button data-correct="false">因为 DeepSeek 不支持多轮对话</button>
+          <button data-correct="true">因为每次调用都从空 input 数组开始，不保留历史</button>
+          <button data-correct="false">因为 maxSteps 设得太小</button>
+          <button data-correct="false">因为工具注册表没缓存历史</button>
+          <p class="feedback" data-feedback style="margin-top: 0.5rem; font-style: italic"></p>
+        </div>
+
+        <div class="card" data-quiz style="margin-top: 0.75rem">
+          <p><strong>Q2</strong>：自管 history 相比 <code>previous_response_id</code> 的优势不包括？</p>
+          <button data-correct="false">可以序列化持久化到磁盘</button>
+          <button data-correct="false">不绑定 OpenAI 平台</button>
+          <button data-correct="true">平台自动压缩历史，更省 token</button>
+          <button data-correct="false">可以看到并控制每一条历史消息</button>
+          <p class="feedback" data-feedback style="margin-top: 0.5rem; font-style: italic"></p>
+        </div>
+
+        <div class="card" data-quiz style="margin-top: 0.75rem">
+          <p><strong>Q3</strong>："摘要 + 近期窗口"混合方案中，摘要存的是什么？</p>
+          <button data-correct="false">最近 20 条消息的全文</button>
+          <button data-correct="true">早期对话被模型压缩后的语义总结</button>
+          <button data-correct="false">所有 function_call 的参数</button>
+          <button data-correct="false">用户的 IP 地址和浏览器信息</button>
+          <p class="feedback" data-feedback style="margin-top: 0.5rem; font-style: italic"></p>
+        </div>
+      </section>
+
+      <section>
+        <h2>6. 练习</h2>
+        <p style="color: var(--muted); font-style: italic">
+          以下练习只描述目标，不提供实现代码——你需要自己写。
+          完成后可以用 <code>bun run src/main.ts</code> 验证。
+        </p>
+
+        <ol>
+          <li>
+            <strong>会话持久化</strong>：新建 <code>src/Agent/session.ts</code>，实现一个 <code>SessionManager</code>
+            类。它负责把 <code>conversation</code> 数组（即 <code>ResponseInput</code>）持久化到本地 JSON 文件，
+            支持 <code>save</code> 和 <code>load</code>。每个会话用唯一 ID 区分。
+          </li>
+          <li>
+            <strong>改造 runAgent</strong>：让 <code>runAgent</code> 接受一个可选的 <code>conversation</code> 参数
+            （而不是内部初始化为空数组）。调用侧负责传入上一次保存的 conversation。
+            新消息执行完毕后，把更新后的 conversation 返回给调用侧。
+          </li>
+          <li>
+            <strong>上下文压缩</strong>：在 <code>session.ts</code> 中实现三种压缩策略之一的 <code>compress</code> 方法：
+            当 conversation 消息数超过阈值（如 30 条），自动压缩。
+            建议从滑动窗口开始，跑通后再升级到摘要方案。
+          </li>
+          <li>
+            <strong>端到端验证</strong>：在 <code>main.ts</code> 中写一个多轮对话场景
+            （如：先加 2 条待办 → 再问"我刚才加了什么"→ 再添加 1 条 → 列出全部）。
+            关闭进程再重启，验证能接着上次对话继续。
+          </li>
+        </ol>
+
+        <div class="sidenote">
+          <strong>提示</strong>：第 4 步验证"重启后恢复"是关键验收点。如果关了进程就全丢了，
+          说明 session 没有正确落盘或加载。检查 JSON 文件的读写路径和序列化格式。
+        </div>
+      </section>
+
+      <div class="primary-source">
+        <p class="label">主阅读</p>
+        <p style="margin: 0">
+          <a href="https://www.anthropic.com/engineering/building-effective-agents" target="_blank" rel="noopener">
+            Anthropic: Building effective agents
+          </a>
+          — 第 4 节 "Augmented LLM patterns" 和 "Workflow vs Agent" 的上下文管理讨论。
+          配合
+          <a href="https://developers.openai.com/api/docs/guides/function-calling" target="_blank" rel="noopener">
+            OpenAI Function calling guide
+          </a>
+          中多轮 tool call 的 input 拼接部分。
+        </p>
+      </div>
+
+      <nav class="lesson-nav">
+        <a href="./0006-structured-planning.html">← 上一课: 0006 结构化计划与轨迹</a>
+        <a href="../CURRICULUM.md" class="nav-index">课程索引</a>
+        <span></span>
+      </nav>
+
+      <footer class="lesson-footer">
+        <p>
+          <strong>写 session 代码时卡住了？</strong>——说说你遇到的问题：是 JSON 序列化格式不对，还是
+          loop 改造后的类型报错？贴出错误信息，我帮你定位。
+        </p>
+        <p>
+          相关文件：
+          <a href="../CURRICULUM.md">CURRICULUM.md</a> ·
+          <a href="../reference/glossary.html">术语表</a> ·
+          <code>src/Agent/loop.ts</code> ·
+          <code>learning-records/0004-streaming-and-session.md</code>
+        </p>
+      </footer>
+    </div>
+
+    <script>
+      (() => {
+        const html = document.documentElement;
+        const btn = document.getElementById('themeToggle');
+        const saved = localStorage.getItem('theme');
+        if (saved) html.dataset.theme = saved;
+        const icons = { auto: '◐', light: '☀', dark: '☾' };
+        const update = () => { btn.textContent = icons[html.dataset.theme || 'auto']; };
+        update();
+        btn.addEventListener('click', () => {
+          const t = html.dataset.theme;
+          const next = !t || t === 'auto' ? 'light' : t === 'light' ? 'dark' : 'auto';
+          html.dataset.theme = next === 'auto' ? '' : next;
+          if (next === 'auto') { localStorage.removeItem('theme'); delete html.dataset.theme; }
+          else localStorage.setItem('theme', next);
+          update();
+        });
+      })();
+      document.querySelectorAll("[data-quiz]").forEach((quiz) => {
+        const feedback = quiz.querySelector("[data-feedback]");
+        const buttons = [...quiz.querySelectorAll("button")];
+        buttons.forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const correct = btn.dataset.correct === "true";
+            buttons.forEach((b) => {
+              b.disabled = true;
+              if (b.dataset.correct === "true") b.classList.add("correct");
+            });
+            if (!correct) btn.classList.add("wrong");
+            if (feedback) {
+              feedback.textContent = correct ? "正确。" : "再想想。";
+            }
+          });
+        });
+      });
+    </script>
+  </body>
+</html>

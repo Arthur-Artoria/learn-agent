@@ -1,6 +1,6 @@
 import type OpenAI from 'openai';
 import type { ResponseFunctionToolCall, ResponseInput, ResponseInputItem, ResponseOutputItem } from 'openai/resources/responses/responses.mjs';
-import { executeTool } from '../ResponsesAPI/FunctionCalling';
+import type { ToolRegistry } from '../tools/registry';
 
 interface RunAgentOptions {
   maxSteps: number
@@ -10,7 +10,7 @@ interface RunAgentOptions {
 interface RunAgentParams {
   client: OpenAI
   input: string
-  tools: OpenAI.Responses.Tool[]
+  registry: ToolRegistry
   options: RunAgentOptions
 }
 
@@ -21,7 +21,7 @@ interface RunAgentResult {
   steps: number
 }
 
-export const runAgent = async ({ client, input, tools, options }: RunAgentParams): Promise<RunAgentResult> => { 
+export const runAgent = async ({ client, input, registry, options }: RunAgentParams): Promise<RunAgentResult> => { 
   const { maxSteps, instructions } = options
   const trajectory: {step: number, output: ResponseOutputItem[]}[] = []
   const currentInput: ResponseInput = [
@@ -36,7 +36,7 @@ export const runAgent = async ({ client, input, tools, options }: RunAgentParams
 
   while (steps < maxSteps) {
     const response = await client.responses.create({
-      tools,
+      tools: registry.getSchemas(),
       model: 'gpt-5.4-mini',
       input: currentInput,
       instructions,
@@ -54,10 +54,12 @@ export const runAgent = async ({ client, input, tools, options }: RunAgentParams
     currentInput.push(...(output as ResponseInputItem[]))
     const functionCallOutputs: ResponseInputItem.FunctionCallOutput[] = []
     for (const functionCall of functionCalls) {
+      const params = JSON.parse(functionCall.arguments)
+      const result = await registry.execute(functionCall.name, params)
       const functionCallOutput: ResponseInputItem.FunctionCallOutput = {
         type: 'function_call_output',
         call_id: functionCall.call_id,
-        output: await executeTool(functionCall)
+        output: result,
       }
       functionCallOutputs.push(functionCallOutput)
     }
