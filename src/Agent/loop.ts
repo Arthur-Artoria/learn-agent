@@ -6,10 +6,23 @@ import type {
   ResponseOutputItem,
 } from 'openai/resources/responses/responses.mjs';
 import type { ToolRegistry } from '../tools/registry';
+import { retry } from './retry';
 
 interface RunAgentOptions {
   maxSteps: number;
   instructions?: string;
+}
+
+export interface RunLog {
+  runId: string;
+  outcome: 'success' | 'max_steps' | 'timeout' | 'error';
+  timeline: {
+    step: number;
+    tool: string;
+    params: Record<string, unknown>;
+    durationMs: number;
+    status: 'ok' | 'error';
+  }[];
 }
 
 interface RunAgentParams {
@@ -19,14 +32,73 @@ interface RunAgentParams {
   options: RunAgentOptions;
   summary?: string;
   conversation?: ResponseInputItem[];
+  timeoutMs?: number;
 }
 
-interface RunAgentResult {
+export interface RunAgentResult {
   finalOutput: ResponseOutputItem | null;
   outputText: string | null;
   trajectory: { step: number; output: ResponseOutputItem[] }[];
   steps: number;
   conversation: ResponseInputItem[];
+  runLog: RunLog;
+}
+
+async function callModel(
+  client: OpenAI,
+  input: ResponseInput,
+  registry: ToolRegistry,
+  instructions: string | undefined,
+  timeoutMs: number,
+) {
+  try {
+    return await retry(
+      () =>
+        client.responses.create(
+          {
+            tools: registry.getSchemas(),
+            model: 'gpt-5.4-mini',
+            input,
+            instructions,
+          },
+          { timeout: timeoutMs },
+        ),
+      { maxRetries: 3 },
+    )();
+  } catch {
+    return null;
+  }
+}
+
+async function executeTool(
+  functionCall: ResponseFunctionToolCall,
+  registry: ToolRegistry,
+  runLog: RunLog,
+  step: number,
+): Promise<ResponseInputItem.FunctionCallOutput> {
+  const startedAt = Date.now();
+  const params = JSON.parse(functionCall.arguments);
+  let result: string;
+
+  try {
+    result = await registry.execute(functionCall.name, params);
+  } catch (err) {
+    result = `Error: ${err instanceof Error ? err.message : String(err)}`;
+  }
+
+  runLog.timeline.push({
+    step,
+    tool: functionCall.name,
+    params,
+    durationMs: Date.now() - startedAt,
+    status: result.startsWith('Error') ? 'error' : 'ok',
+  });
+
+  return {
+    type: 'function_call_output',
+    call_id: functionCall.call_id,
+    output: result,
+  };
 }
 
 export const runAgent = async ({
@@ -36,37 +108,39 @@ export const runAgent = async ({
   options,
   summary,
   conversation = [],
+  timeoutMs = 60000,
 }: RunAgentParams): Promise<RunAgentResult> => {
   const { maxSteps, instructions } = options;
   const trajectory: { step: number; output: ResponseOutputItem[] }[] = [];
+  const runLog: RunLog = {
+    runId: crypto.randomUUID(),
+    outcome: 'success',
+    timeline: [],
+  };
   const currentInput: ResponseInput = [];
 
   if (summary) {
-    currentInput.push({
-      role: 'developer',
-      content: summary,
-    });
+    currentInput.push({ role: 'developer', content: summary });
   }
-
-  currentInput.push(...conversation, {
-    role: 'user',
-    content: input,
-  });
+  currentInput.push(...conversation, { role: 'user', content: input });
 
   let steps = 0;
   let finalOutput: ResponseOutputItem | null = null;
   let outputText: string | null = null;
 
   while (steps < maxSteps) {
-    const response = await client.responses.create({
-      tools: registry.getSchemas(),
-      model: 'gpt-5.4-mini',
-      input: currentInput,
-      instructions,
-    });
+    const response = await callModel(client, currentInput, registry, instructions, timeoutMs);
+    if (!response) {
+      runLog.outcome = 'error';
+      break;
+    }
+
     const { output } = response;
     trajectory.push({ step: steps, output });
-    const functionCalls = output.filter((item): item is ResponseFunctionToolCall => item.type === 'function_call');
+
+    const functionCalls = output.filter(
+      (item): item is ResponseFunctionToolCall => item.type === 'function_call',
+    );
 
     if (functionCalls.length === 0) {
       finalOutput = output[output.length - 1] || null;
@@ -75,23 +149,23 @@ export const runAgent = async ({
     }
 
     currentInput.push(...(output as ResponseInputItem[]));
-    const functionCallOutputs: ResponseInputItem.FunctionCallOutput[] = [];
-    for (const functionCall of functionCalls) {
-      const params = JSON.parse(functionCall.arguments);
-      const result = await registry.execute(functionCall.name, params);
-      const functionCallOutput: ResponseInputItem.FunctionCallOutput = {
-        type: 'function_call_output',
-        call_id: functionCall.call_id,
-        output: result,
-      };
-      functionCallOutputs.push(functionCallOutput);
-    }
 
+    const functionCallOutputs: ResponseInputItem.FunctionCallOutput[] = [];
+    for (const fc of functionCalls) {
+      functionCallOutputs.push(await executeTool(fc, registry, runLog, steps));
+    }
     currentInput.push(...functionCallOutputs);
+
     steps++;
   }
 
-  const rawConversation = currentInput.filter(item => 'role' in item && item.role !== 'developer')
+  if (runLog.outcome !== 'error' && steps >= maxSteps) {
+    runLog.outcome = 'max_steps';
+  }
 
-  return { finalOutput, outputText, trajectory, steps, conversation: rawConversation };
+  const rawConversation = currentInput.filter(
+    (item) => 'role' in item && item.role !== 'developer',
+  );
+
+  return { finalOutput, outputText, trajectory, steps, conversation: rawConversation, runLog };
 };

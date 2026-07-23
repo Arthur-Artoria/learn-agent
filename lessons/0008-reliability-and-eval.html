@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>0008 · 可靠性与可观测性 · learn-agent</title>
+    <link rel="stylesheet" href="../assets/styles.css" />
+  </head>
+  <body>
+    <button class="theme-toggle" id="themeToggle" title="切换主题" aria-label="切换主题">☀</button>
+    <div class="page">
+      <header class="hero">
+        <p class="eyebrow">Lesson 0008 · 第 6 周</p>
+        <h1>可靠性与可观测性：把 Agent 从"能跑"变成"跑不坏"</h1>
+        <p class="lede">
+          L5–L7 的 Agent 在正常情况下跑得很好。但生产环境不是 demo——网络会抖、
+          API 会超时、对话越来越长、改一个 prompt 可能会静默破坏之前正常的 case。
+          这一课教四件事：<strong>护栏</strong>、<strong>重试</strong>、
+          <strong>结构化日志</strong>、<strong>回归评测</strong>。
+        </p>
+        <div class="meta">
+          <span>约 15–20 分钟</span>
+          <span>前置：L5 Loop + L7 Session</span>
+          <span><a href="../reference/glossary.html">术语表</a></span>
+        </div>
+      </header>
+
+      <section>
+        <h2>1. 四个维度一张图</h2>
+
+        <div class="card">
+          <table>
+            <tr><th>维度</th><th>解决的问题</th><th>一句口诀</th><th>你现在的状态</th></tr>
+            <tr>
+              <td>护栏</td>
+              <td>Agent 失控（超时/超步/烧钱）</td>
+              <td>让它死得干净</td>
+              <td><span class="badge partial">maxSteps 已有</span></td>
+            </tr>
+            <tr>
+              <td>重试</td>
+              <td>临时故障导致整个任务崩</td>
+              <td>不要因为打喷嚏就住院</td>
+              <td><span class="badge gap">无</span></td>
+            </tr>
+            <tr>
+              <td>结构化日志</td>
+              <td>出问题只能猜，看不到现场</td>
+              <td>让黑盒变白盒</td>
+              <td><span class="badge partial">trajectory 有人读格式</span></td>
+            </tr>
+            <tr>
+              <td>评测</td>
+              <td>改 prompt/工具后不知好坏</td>
+              <td>不改坏已知功能</td>
+              <td><span class="badge gap">无</span></td>
+            </tr>
+          </table>
+        </div>
+
+        <p style="margin-top: 0.75rem">
+          四个维度不是四个独立功能——它们<strong>互相依赖</strong>：
+          护栏告诉你 Agent 什么时候出界了；日志记录出界时的上下文；
+          重试让你在出界前多给一次机会；评测确保你修了一个 bug 不会引入两个新的。
+        </p>
+      </section>
+
+      <section>
+        <h2>2. 护栏：不死、不超、不烧钱</h2>
+
+        <p>你已经有了 <code>maxSteps</code>（loop.ts:38），但生产 Agent 需要三类护栏：</p>
+
+        <div class="grid-2">
+          <div class="card">
+            <h3 style="margin: 0 0 0.5rem; font-size: 1rem">1. 步数上限（已有）</h3>
+            <p style="font-size: 0.85rem; color: var(--muted); margin: 0">
+              <code>while (steps &lt; maxSteps)</code> — 防止无限 loop。但只有这个不够：模型可能在一步里生成 10KB 输出，或 API 响应等 60 秒。
+            </p>
+          </div>
+          <div class="card">
+            <h3 style="margin: 0 0 0.5rem; font-size: 1rem">2. 超时（缺失）</h3>
+            <p style="font-size: 0.85rem; color: var(--muted); margin: 0">
+              单次 API 调用超时 + 整体任务超时。网络抖动时，<code>fetch</code> 可能挂几分钟。<code>AbortController</code> 是答案。
+            </p>
+          </div>
+        </div>
+        <div class="grid-2" style="margin-top: 0.5rem">
+          <div class="card">
+            <h3 style="margin: 0 0 0.5rem; font-size: 1rem">3. Token / 费用预算（缺失）</h3>
+            <p style="font-size: 0.85rem; color: var(--muted); margin: 0">
+              每轮 response 返回 <code>usage</code>（input_tokens, output_tokens）。累积超过阈值就停——防止 prompt 被恶意注入无限对话。
+            </p>
+          </div>
+          <div class="card">
+            <h3 style="margin: 0 0 0.5rem; font-size: 1rem">4. 失败模式</h3>
+            <p style="font-size: 0.85rem; color: var(--muted); margin: 0">
+              护栏触发时应该返回<strong>部分结果</strong>（"我在第 3 步超时了，但完成了 1、2"），而不是无声崩溃。
+            </p>
+          </div>
+        </div>
+
+        <div class="sidenote">
+          <strong>面试考点</strong>：当面试官问你"你的 Agent 如何防止失控"时，
+          你应该能说出三类护栏的具体参数和触发后的行为——而不是"我设了 maxSteps=10"就完了。
+        </div>
+      </section>
+
+      <section>
+        <h2>3. 重试：不要因一个喷嚏就住院</h2>
+
+        <p>
+          当前 <code>loop.ts</code> 没有重试——<code>client.responses.create()</code> 失败
+          → 整个 <code>runAgent</code> 抛异常 → 调用方收到一个 Error，之前已完成的操作全部丢失。
+        </p>
+
+        <p><strong>什么值得重试？</strong></p>
+        <div class="card accent">
+          <pre style="background: none; padding: 0; margin: 0"><code>可重试（瞬态故障）                不应重试（确定性失败）
+═══════════════════              ══════════════════
+• 网络超时 429 Rate Limit         • 400 Bad Request（参数错误）
+• 5xx Server Error                • 401 Unauthorized（API key 错）
+• 连接被拒绝 (ECONNREFUSED)       • Tool execute 返回的 Error（业务错误，不是故障）</code></pre>
+        </div>
+
+        <p style="margin-top: 0.75rem"><strong>三点重试纪律：</strong></p>
+        <ol>
+          <li><strong>指数退避</strong>：间隔 = 1s → 2s → 4s → 8s，不是固定 1s</li>
+          <li><strong>最大重试次数</strong>：通常 3 次，避免无底洞</li>
+          <li><strong>只重试 API 调用本身，不重试整个 loop</strong>：loop 里已经有工具副作用了，重复整个 loop 会重复执行工具</li>
+        </ol>
+
+        <div class="callout accent">
+          <strong>为什么不能重试整个 loop？</strong> loop 里的工具调用有副作用（改文件、发 HTTP）。
+          如果第 2 步的 API 调用失败了，你重试整个 loop——第 1 步的工具会再次执行，可能导致重复创建数据。
+          正确的做法是<strong>只在 <code>client.responses.create()</code> 这层加重试</strong>。
+        </div>
+      </section>
+
+      <section>
+        <h2>4. 结构化日志：让机器也能读你的执行轨迹</h2>
+
+        <p>
+          你现在的 <code>formatTrajectory</code> 是人读的 emoji 格式——适合 debug，
+          但如果你要做统计（"过去 100 次运行平均几步完成？哪个工具报错最多？"），
+          需要对机器友好的格式。
+        </p>
+
+        <p><strong>不需要替换，需要<em>加一层</em>：</strong></p>
+
+        <div class="grid-2">
+          <div class="card">
+            <span class="badge accent">现状</span>
+            <pre style="background: none; padding: 0.5rem 0 0 0; margin: 0"><code>console.log(
+  formatTrajectory(traj)
+)
+// ── Step 0 ──
+// 🔧 todo_add(...)
+// 💬 已添加...</code></pre>
+          </div>
+          <div class="card ok">
+            <span class="badge ok">加一层</span>
+            <pre style="background: none; padding: 0.5rem 0 0 0; margin: 0"><code>{
+  "runId": "abc123",
+  "startedAt": "...",
+  "steps": 3,
+  "outcome": "success",
+  "timeline": [
+    { "step": 0,
+      "tool": "todo_add",
+      "params": {...},
+      "durationMs": 234 },
+    ...
+  ]
+}</code></pre>
+          </div>
+        </div>
+
+        <p style="margin-top: 0.75rem">
+          结构化日志的三个最低要求字段：<strong>runId</strong>（一次运行一个 UUID）、
+          <strong>outcome</strong>（success / max_steps / timeout / error）、
+          <strong>timeline</strong>（每步的工具+耗时+结果）。
+          有了这些，你可以用一行 jq 命令统计失败率。
+        </p>
+
+        <div class="callout">
+          <strong>面试叙事</strong>：不要说"我做了日志"。说"我的 Agent 每条轨迹有结构化日志，
+          runId 关联一次完整运行，outcome 字段标记终止原因——所以我可以回放任何一次失败，
+          不需要用户重现。"这揭示了你的生产思维。
+        </div>
+      </section>
+
+      <section>
+        <h2>5. 评测：改一行代码，跑一遍回归</h2>
+
+        <p>
+          你改了一段 prompt、加了一个工具、调整了 maxSteps——这些改动可能静默破坏
+          之前正常的 case。没有评测，你只能靠"感觉"。
+        </p>
+
+        <p><strong>最小可行评测集应该长什么样：</strong></p>
+
+        <div class="card">
+          <table>
+            <tr><th>用例名</th><th>输入</th><th>断言什么</th></tr>
+            <tr>
+              <td>add_single_todo</td>
+              <td>添加待办：买菜</td>
+              <td>outputText 包含"已添加"；至少调用 1 次 todo_add</td>
+            </tr>
+            <tr>
+              <td>list_all_todos</td>
+              <td>列出所有待办</td>
+              <td>至少调用 1 次 todo_list；trajectory 中无 function_call 报错</td>
+            </tr>
+            <tr>
+              <td>unknown_tool</td>
+              <td>帮我订机票</td>
+              <td>outputText 不崩溃；明确告知"无法完成"或要求补充</td>
+            </tr>
+            <tr>
+              <td>multi_step_plan</td>
+              <td>帮我规划本周任务</td>
+              <td>steps ≥ 2；outputText 包含"总结"或"完成"</td>
+            </tr>
+            <tr>
+              <td>empty_input</td>
+              <td>（空字符串）</td>
+              <td>不抛异常；outputText 不为空（合理处理边界输入）</td>
+            </tr>
+          </table>
+        </div>
+
+        <p style="margin-top: 0.75rem">
+          这些不是单元测试（不测内部逻辑），是<strong>行为回归测试</strong>——
+          验证 Agent 对某个输入的输出符合预期模式。重点是覆盖：
+          正常路径 + 无工具场景 + 边界输入。
+        </p>
+      </section>
+
+      <section>
+        <h2>6. 自检</h2>
+
+        <div class="card" data-quiz>
+          <p><strong>Q1</strong>：重试应该加在哪一层？（选最佳实践）</p>
+          <button data-correct="false">整个 runAgent 调用 — 从头重跑</button>
+          <button data-correct="true">单次 API 调用 client.responses.create()</button>
+          <button data-correct="false">每个工具的 execute 函数内部</button>
+          <button data-correct="false">main.ts 的 setup 函数</button>
+          <p class="feedback" data-feedback style="margin-top: 0.5rem; font-style: italic"></p>
+        </div>
+
+        <div class="card" data-quiz style="margin-top: 0.75rem">
+          <p><strong>Q2</strong>：结构化日志的三个最低要求字段不包括？</p>
+          <button data-correct="false">runId（一次运行的唯一标识）</button>
+          <button data-correct="false">outcome（终止原因：success / timeout / error）</button>
+          <button data-correct="true">model（使用的模型名称）</button>
+          <button data-correct="false">timeline（每步的工具+耗时+结果）</button>
+          <p class="feedback" data-feedback style="margin-top: 0.5rem; font-style: italic"></p>
+        </div>
+
+        <div class="card" data-quiz style="margin-top: 0.75rem">
+          <p><strong>Q3</strong>：下列哪种错误不应该重试？</p>
+          <button data-correct="false">429 Rate Limit</button>
+          <button data-correct="false">网络连接超时</button>
+          <button data-correct="true">400 Bad Request（参数格式错误）</button>
+          <button data-correct="false">503 Service Unavailable</button>
+          <p class="feedback" data-feedback style="margin-top: 0.5rem; font-style: italic"></p>
+        </div>
+      </section>
+
+      <section>
+        <h2>7. 练习</h2>
+        <p style="color: var(--muted); font-style: italic">
+          以下练习只描述目标，代码由你实现。
+        </p>
+
+        <ol>
+          <li>
+            <strong>超时护栏</strong>：给 <code>runAgent</code> 加 <code>timeoutMs</code> 选项。用
+            <code>AbortController</code> 控制单次 API 调用超时（不是整个 loop）。
+            超时后返回部分结果 + outcome = <code>"timeout"</code>，不要直接崩。
+          </li>
+          <li>
+            <strong>重试装饰器</strong>：在 <code>src/Agent/</code> 下新建 <code>retry.ts</code>，
+            写一个通用重试函数（接收 async fn + 配置，返回带重试的 fn）。
+            遇到 429 / 5xx / 网络错误时自动重试，最多 3 次，指数退避（1s → 2s → 4s）。
+            只包裹 <code>client.responses.create()</code>，不重试整个 loop。
+          </li>
+          <li>
+            <strong>结构化日志</strong>：改造 <code>runAgent</code>，除了返回 trajectory 数组，
+            额外输出一份 JSON 格式的 <code>RunLog</code>（含 runId、outcome、timeline）。
+            timeline 中每步包含 tool 名、参数、耗时 ms、成功/失败。
+          </li>
+          <li>
+            <strong>评测脚本</strong>：在项目根目录新建 <code>eval/</code> 目录，写一个
+            <code>eval/suite.ts</code> 脚本。定义 5–10 个测试用例（至少覆盖：
+            添加待办、查询、无效工具请求、空输入）。每个用例跑一次 runAgent，
+            用简单断言（字符串包含 / 不抛异常 / steps 范围）验证。脚本输出通过/失败统计。
+          </li>
+        </ol>
+
+        <div class="sidenote">
+          <strong>提示</strong>：评测脚本可以复用 main.ts 的 registry 和 instructions 初始化逻辑，
+          但注意每个用例之间清空待办数据（todos.json）。
+        </div>
+      </section>
+
+      <div class="primary-source">
+        <p class="label">主阅读</p>
+        <p style="margin: 0">
+          <a href="https://cdn.openai.com/business-guides-and-resources/a-practical-guide-to-building-agents.pdf" target="_blank" rel="noopener">
+            OpenAI: A practical guide to building agents
+          </a>
+          — Guardrails 相关章节（评估、护栏、监控）。
+          配合
+          <a href="https://www.anthropic.com/engineering/writing-tools-for-agents" target="_blank" rel="noopener">
+            Anthropic: Writing effective tools for agents
+          </a>
+          中 Evaluation 一节。
+        </p>
+      </div>
+
+      <nav class="lesson-nav">
+        <a href="./0007-session-and-context.html">← 上一课: 0007 会话状态与上下文压缩</a>
+        <a href="../CURRICULUM.md" class="nav-index">课程索引</a>
+        <span></span>
+      </nav>
+
+      <footer class="lesson-footer">
+        <p>
+          <strong>写评测用例时卡住了？</strong>——说说哪个断言难写，或者要不要看看现有工具的 mock 方案。
+        </p>
+        <p>
+          相关文件：
+          <a href="../CURRICULUM.md">CURRICULUM.md</a> ·
+          <a href="../reference/glossary.html">术语表</a> ·
+          <code>src/Agent/loop.ts</code>
+        </p>
+      </footer>
+    </div>
+
+    <script>
+      (() => {
+        const html = document.documentElement;
+        const btn = document.getElementById('themeToggle');
+        const saved = localStorage.getItem('theme');
+        if (saved) html.dataset.theme = saved;
+        const icons = { auto: '◐', light: '☀', dark: '☾' };
+        const update = () => { btn.textContent = icons[html.dataset.theme || 'auto']; };
+        update();
+        btn.addEventListener('click', () => {
+          const t = html.dataset.theme;
+          const next = !t || t === 'auto' ? 'light' : t === 'light' ? 'dark' : 'auto';
+          html.dataset.theme = next === 'auto' ? '' : next;
+          if (next === 'auto') { localStorage.removeItem('theme'); delete html.dataset.theme; }
+          else localStorage.setItem('theme', next);
+          update();
+        });
+      })();
+      document.querySelectorAll("[data-quiz]").forEach((quiz) => {
+        const feedback = quiz.querySelector("[data-feedback]");
+        const buttons = [...quiz.querySelectorAll("button")];
+        buttons.forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const correct = btn.dataset.correct === "true";
+            buttons.forEach((b) => {
+              b.disabled = true;
+              if (b.dataset.correct === "true") b.classList.add("correct");
+            });
+            if (!correct) btn.classList.add("wrong");
+            if (feedback) {
+              feedback.textContent = correct ? "正确。" : "再想想。";
+            }
+          });
+        });
+      });
+    </script>
+  </body>
+</html>

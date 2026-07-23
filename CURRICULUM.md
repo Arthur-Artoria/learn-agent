@@ -18,8 +18,8 @@
 | L4  | 流式 Tool + 会话衔接      | ✅ 已会   | `getWeatherFunctionCalling` + `previous_response_id`；custom tool；课程 0004 |
 | L5  | **完整 Agent Loop**   | ✅ 已会   | `src/Agent/loop.ts`（maxSteps、结束条件、轨迹日志）+ `src/Agent/trajectory.ts`       |
 | L6  | 工具工程（真实副作用、错误、并行）   | ✅ 已会   | `src/tools/` 注册表 + Todo CRUD；错误返回字符串不抛异常 |
-| L7  | 会话记忆与上下文管理          | 🔄 进行中  | 课程 0007 已讲；需自写 session.ts + 改造 loop.ts                                |
-| L8  | 可靠性（护栏、日志、重试、评测）    | ❌ 缺口   | —                                                                    |
+| L7  | 会话记忆与上下文管理          | ✅ 已会   | `src/Agent/session.ts` SessionManager + `loop.ts` 改造 + 多轮对话验证             |
+| L8  | 可靠性（护栏、日志、重试、评测）    | 🔄 进行中  | 课程 0008 已讲；需自写 retry.ts + 超时 + 结构化日志 + eval/ 评测集                   |
 | L9  | 可演示的生产力 Agent 作品    | ❌ 目标   | Mission 的交付物                                                         |
 
 
@@ -160,7 +160,8 @@
 | 0004 | 流式调用与会话衔接 | ✅ 本课 |
 | 0005 | 工具注册表与真实工具：从 switch-case 到可插拔轨道 | ✅ 本课 |
 | 0006 | 结构化计划与轨迹：instructions 驱动 plan-before-act | ✅ 本课 |
-| 0007 | 会话状态与上下文压缩                       | 🔄 本课  |
+| 0007 | 会话状态与上下文压缩                       | ✅ 本课  |
+| 0008 | 可靠性与可观测性                         | 🔄 本课  |
 | …    | 对齐周课表继续拆                         |        |
 
 

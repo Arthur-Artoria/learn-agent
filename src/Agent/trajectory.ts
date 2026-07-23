@@ -1,6 +1,6 @@
 import type { ResponseOutputItem } from 'openai/resources/responses/responses.mjs';
 
-interface StepRecord {
+export interface StepRecord {
   step: number;
   output: ResponseOutputItem[];
 }
