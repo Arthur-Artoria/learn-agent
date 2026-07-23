@@ -57,7 +57,7 @@ async function callModel(
         client.responses.create(
           {
             tools: registry.getSchemas(),
-            model: 'gpt-5.4-mini',
+            model: 'gpt-5.6-sol',
             input,
             instructions,
           },
@@ -65,7 +65,8 @@ async function callModel(
         ),
       { maxRetries: 3 },
     )();
-  } catch {
+  } catch (err) {
+    console.error(err);
     return null;
   }
 }
@@ -108,7 +109,7 @@ export const runAgent = async ({
   options,
   summary,
   conversation = [],
-  timeoutMs = 60000,
+  timeoutMs = 5000,
 }: RunAgentParams): Promise<RunAgentResult> => {
   const { maxSteps, instructions } = options;
   const trajectory: { step: number; output: ResponseOutputItem[] }[] = [];
@@ -124,7 +125,7 @@ export const runAgent = async ({
   }
   currentInput.push(...conversation, { role: 'user', content: input });
 
-  let steps = 0;
+  let steps = 1;
   let finalOutput: ResponseOutputItem | null = null;
   let outputText: string | null = null;
 

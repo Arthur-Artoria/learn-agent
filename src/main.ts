@@ -1,19 +1,21 @@
+import OpenAI from 'openai';
 import { runAgent } from './Agent/loop';
-import { SessionManager } from './Agent/session';
 import type { SessionData } from './Agent/session';
+import { SessionManager } from './Agent/session';
 import { formatTrajectory } from './Agent/trajectory';
-import { getCustomToolCalling, getHoroscopeFunctionCalling, getWeatherFunctionCalling } from './ResponsesAPI/FunctionCalling';
-import { getMathAnswer, getMathReasoning, streamStructuredOutput, structuredOutput } from './ResponsesAPI/StructuredOutput';
-import { textGeneration } from './ResponsesAPI/TextGeneration';
 import { ToolRegistry } from './tools/registry';
 import { todoTools } from './tools/todo';
-import OpenAI from 'openai';
+import readline from 'node:readline/promises';
+import { stdin as input, stdout as output } from 'process'
+
 
 const setup = async () => {
   const client = new OpenAI({
-    baseURL: process.env.GODEX_BASE_URL,
-    apiKey: process.env.OPENAI_API_KEY,
+    baseURL: process.env.CHIYICN_BASE_URL,
+    apiKey: process.env.CHIYICN_API_KEY,
   });
+
+  console.log(process.env.CHIYICN_BASE_URL, process.env.CHIYICN_API_KEY);
 
   const registry = new ToolRegistry();
   for (const tool of todoTools) {
@@ -28,7 +30,10 @@ const setup = async () => {
 2. **执行**：按步骤依次调用工具，每步完成后确认结果再继续
 3. **总结**：最后汇总做了什么、结果如何、是否有遗留问题
 
-如果某一步工具返回 Error，说明失败原因并尝试替代方案。不要直接放弃。`;
+如果某一步工具返回 Error，说明失败原因并尝试替代方案。不要直接放弃。
+
+**不要随意创建/删除/更改待办**：除非用户明确要求，不要以自己的判断创建/删除/更改任何待办
+`;
 
   const run = async (input: string) => {
     const { summary, history }: SessionData = await sessionManager.load();
@@ -50,17 +55,13 @@ const setup = async () => {
     console.log('\n---\n');
   };
 
-  // 第 1 轮：添加两条待办
-  await run('帮我添加两条待办：买牛奶、写周报');
+  const rl = readline.createInterface({ input, output });
 
-  // 第 2 轮：追问（验证记住了上一轮）
-  await run('我刚才加了什么待办？');
-
-  // 第 3 轮：再添加一条
-  await run('再加一条：周三下午去看牙医');
-
-  // 第 4 轮：列出全部待办
-  await run('帮我列出所有待办事项');
+  console.log('请输入你的请求：');
+  console.log('输入 "Ctrl+C" 两次退出');
+  for await (const line of rl) {
+    await run(line);
+  }
 };
 
 await setup();

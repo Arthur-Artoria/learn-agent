@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>0009 · 生产力 Agent MVP · learn-agent</title>
+    <link rel="stylesheet" href="../assets/styles.css" />
+  </head>
+  <body>
+    <button class="theme-toggle" id="themeToggle" title="切换主题" aria-label="切换主题">☀</button>
+    <div class="page">
+      <header class="hero">
+        <p class="eyebrow">Lesson 0009 · 第 5 周</p>
+        <h1>生产力 Agent MVP：从零件到产品</h1>
+        <p class="lede">
+          L0–L8 你已经有了所有零件：loop、工具注册表、session、重试、护栏、评测。
+          这一课时 <strong>不是学新东西，是把零件装成一件可演示的产品</strong>——一个
+          别人按 README 十分钟能跑通的个人任务管家 CLI。
+        </p>
+        <div class="meta">
+          <span>约 12–15 分钟</span>
+          <span>前置：L0–L8 全部</span>
+          <span><a href="../reference/glossary.html">术语表</a></span>
+        </div>
+      </header>
+
+      <section>
+        <h2>1. 你手头有什么——全景图</h2>
+
+        <div class="card">
+          <table>
+            <tr><th>模块</th><th>职责</th><th>文件</th></tr>
+            <tr><td>Agent Loop</td><td>while + maxSteps + 工具编排</td><td><code>src/Agent/loop.ts</code></td></tr>
+            <tr><td>轨迹格式化</td><td>人读的执行日志</td><td><code>src/Agent/trajectory.ts</code></td></tr>
+            <tr><td>结构化日志</td><td>机器可读的 runLog（runId/timeline）</td><td><code>src/Agent/loop.ts</code> RunLog</td></tr>
+            <tr><td>重试</td><td>瞬态故障指数退避</td><td><code>src/Agent/retry.ts</code></td></tr>
+            <tr><td>会话管理</td><td>持久化、摘要压缩、多轮衔接</td><td><code>src/Agent/session.ts</code></td></tr>
+            <tr><td>工具注册表</td><td>schema + execute 集中管理</td><td><code>src/tools/registry.ts</code></td></tr>
+            <tr><td>Todo 工具</td><td>CRUD + 搜索、本地 JSON 持久化</td><td><code>src/tools/todo.ts</code></td></tr>
+            <tr><td>评测</td><td>9 条行为回归用例</td><td><code>eval/suite.ts</code></td></tr>
+          </table>
+        </div>
+
+        <p style="margin-top: 0.75rem">
+          数据流：<code>CLI 输入 → SessionManager.load() → runAgent(summary, history) → output + trajectory → SessionManager.save() → CLI 输出</code>。
+          每个模块职责单一，互不侵入——这本身就是面试时可以讲的架构故事。
+        </p>
+      </section>
+
+      <section>
+        <h2>2. CLI 交互循环：从 one-shot 到持续对话</h2>
+
+        <p>
+          你现在的 <code>main.ts</code> 是硬编码几个 <code>await run(...)</code> 顺序执行。
+          MVP 需要一个<strong>交互式 read-eval-print loop (REPL)</strong>：用户在终端持续输入，Agent 持续应答，按 Ctrl+D 退出。
+        </p>
+
+        <div class="card accent">
+          <pre style="background: none; padding: 0; margin: 0"><code>import * as readline from 'node:readline';
+
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout,
+  prompt: '你: ',
+});
+
+rl.prompt();
+rl.on('line', async (line) => {
+  const input = line.trim();
+  if (!input) { rl.prompt(); return; }
+
+  const { summary, history } = await session.load();
+  const result = await runAgent({ client, input, registry, options, summary, conversation: history });
+  await session.save(result.conversation);
+
+  console.log(`\nAgent: ${result.outputText}\n`);
+  rl.prompt();
+});</code></pre>
+        </div>
+
+        <p style="margin-top: 0.75rem">
+          这 10 行代码就是 MVP 的交互入口。它串起了 session → loop → session 的完整流程。
+          不需要框架，不需要 UI 库，就是一个终端 REPL。
+        </p>
+
+        <div class="sidenote">
+          <strong>产品细节</strong>：加上 <code>/exit</code>、<code>/clear</code> 等命令可以让体验更完整，
+          但 MVP 阶段优先保证核心对话流程稳定。额外命令是锦上添花。
+        </div>
+      </section>
+
+      <section>
+        <h2>3. 三个用户故事 —— 你的 MVP 必须能讲</h2>
+
+        <p>
+          MVP 不是"所有功能都做完"，是<strong>三个完整的端到端用户故事能跑通</strong>。
+          每个故事 = 用户的自然语言输入 → Agent 多步推理 + 工具调用 → 有用的输出。
+        </p>
+
+        <div class="grid-2">
+          <div class="card">
+            <span class="badge accent">故事 1</span>
+            <h3 style="margin: 0.5rem 0; font-size: 1rem">快速记录</h3>
+            <p style="font-size: 0.85rem; color: var(--muted); margin: 0">
+              "帮我把买牛奶、写周报、周四开会加到待办里"<br>
+              → Agent 添加 3 条 → 确认完成并列出摘要
+            </p>
+          </div>
+          <div class="card">
+            <span class="badge accent">故事 2</span>
+            <h3 style="margin: 0.5rem 0; font-size: 1rem">回顾与操作</h3>
+            <p style="font-size: 0.85rem; color: var(--muted); margin: 0">
+              "我刚才加了什么？把写周报标为完成，然后列出所有还没做的事"<br>
+              → 回忆历史 → 标记完成 → 列出 pending
+            </p>
+          </div>
+          <div class="card">
+            <span class="badge accent">故事 3</span>
+            <h3 style="margin: 0.5rem 0; font-size: 1rem">规划和清理</h3>
+            <p style="font-size: 0.85rem; color: var(--muted); margin: 0">
+              "帮我规划下周任务，清理掉重复的，按优先级排一下"<br>
+              → 先列出全部 → 分析去重 → 添加新增 → 给出计划
+            </p>
+          </div>
+        </div>
+
+        <div class="callout accent">
+          <strong>面试叙事</strong>：不要只 demo 功能。说："我的 MVP 覆盖三条用户故事——
+          快速录入、上下文回顾、规划清理。每条故事都经过至少 2 步工具调用，
+          验证了 loop / session / 工具编排的协作。这里有 eval 回归结果，9 条全绿。"
+        </div>
+      </section>
+
+      <section>
+        <h2>4. README：让陌生人十分钟跑通</h2>
+
+        <p>
+          课程的 L9 验收标准写得很清楚：<em>陌生人按 README 能在 10 分钟内跑通一个完整任务</em>。
+          README 不是文档，是<strong>新用户的 onboarding 路径</strong>。
+        </p>
+
+        <p><strong>README 最少要有的六个小节：</strong></p>
+        <ol>
+          <li><strong>一句话：这是什么</strong> — "个人任务管家 CLI，用自然语言管理待办事项"</li>
+          <li><strong>前置条件</strong> — Bun, Node 模块, .env 配置 (GODEX_BASE_URL)</li>
+          <li><strong>安装</strong> — <code>bun install</code></li>
+          <li><strong>运行</strong> — <code>bun run src/main.ts</code></li>
+          <li><strong>演示（3 条用户故事）</strong> — 逐条附输入/输出截图或文字</li>
+          <li><strong>跑评测</strong> — <code>bun run eval/suite.ts</code></li>
+        </ol>
+
+        <div class="sidenote">
+          README 放在项目根目录 <code>README.md</code>。以后面试时把 repo 链接发给面试官，
+          对方打开 README 五分钟内就能理解你做了什么——这比你在面试中口头描述强十倍。
+        </div>
+      </section>
+
+      <section>
+        <h2>5. 自检</h2>
+
+        <div class="card" data-quiz>
+          <p><strong>Q1</strong>：MVP 的三个用户故事分别验证什么能力？</p>
+          <button data-correct="true">快速录入、上下文回顾、规划清理</button>
+          <button data-correct="false">用户注册、权限管理、数据备份</button>
+          <button data-correct="false">语音输入、图片识别、多语言切换</button>
+          <button data-correct="false">Web 界面、移动端适配、推送通知</button>
+          <p class="feedback" data-feedback style="margin-top: 0.5rem; font-style: italic"></p>
+        </div>
+
+        <div class="card" data-quiz style="margin-top: 0.75rem">
+          <p><strong>Q2</strong>：CLI REPL 的核心循环是哪三步？</p>
+          <button data-correct="false">输入 → 解析命令 → 执行命令</button>
+          <button data-correct="true">load session → runAgent → save session</button>
+          <button data-correct="false">create client → register tools → run loop</button>
+          <button data-correct="false">读文件 → 调 API → 写文件</button>
+          <p class="feedback" data-feedback style="margin-top: 0.5rem; font-style: italic"></p>
+        </div>
+
+        <div class="card" data-quiz style="margin-top: 0.75rem">
+          <p><strong>Q3</strong>：README 不是文档，是什么？</p>
+          <button data-correct="false">API 参考手册</button>
+          <button data-correct="false">开发日记</button>
+          <button data-correct="true">新用户的 onboarding 路径</button>
+          <button data-correct="false">代码注释合集</button>
+          <p class="feedback" data-feedback style="margin-top: 0.5rem; font-style: italic"></p>
+        </div>
+      </section>
+
+      <section>
+        <h2>6. 练习</h2>
+        <p style="color: var(--muted); font-style: italic">
+          以下练习只描述目标，代码由你实现。
+        </p>
+
+        <ol>
+          <li>
+            <strong>CLI REPL</strong>：改造 <code>main.ts</code>，用 <code>node:readline</code> 实现交互式对话循环。
+            用户输入一条消息 → Agent 处理并输出结果 → 等待下一条输入。Ctrl+C 两次退出。
+          </li>
+          <li>
+            <strong>三个用户故事验证</strong>：按第 3 节的三条故事，在 REPL 中逐条跑通。
+            确认每条故事都涉及 ≥2 步工具调用，session 在多轮间正确衔接。
+          </li>
+          <li>
+            <strong>README.md</strong>：在项目根目录写 README。包含第 4 节列出的六个小节，
+            截取终端录屏或关键输出作为演示证据。
+          </li>
+        </ol>
+
+        <div class="sidenote">
+          <strong>验收检查清单</strong>：① 别人 clone 仓库后按 README 三步能跑起来
+          ② 三条用户故事逐条演示无报错 ③ 关闭终端重开，对话能继续
+          ④ <code>bun run eval/suite.ts</code> 全绿。
+          四条全过，MVP 就合格了。
+        </div>
+      </section>
+
+      <div class="primary-source">
+        <p class="label">主阅读</p>
+        <p style="margin: 0">
+          <a href="https://cdn.openai.com/business-guides-and-resources/a-practical-guide-to-building-agents.pdf" target="_blank" rel="noopener">
+            OpenAI: A practical guide to building agents
+          </a>
+          — "Shipping to production" 章节。关注从 demo 到产品的 checklist。
+        </p>
+      </div>
+
+      <nav class="lesson-nav">
+        <a href="./0008-reliability-and-eval.html">← 上一课: 0008 可靠性与可观测性</a>
+        <a href="../CURRICULUM.md" class="nav-index">课程索引</a>
+        <span></span>
+      </nav>
+
+      <footer class="lesson-footer">
+        <p>
+          <strong>CLI REPL 跑起来有卡顿或异常？</strong>——贴出错误信息和相关代码段。
+        </p>
+        <p>
+          相关文件：
+          <a href="../CURRICULUM.md">CURRICULUM.md</a> ·
+          <a href="../reference/glossary.html">术语表</a> ·
+          <code>src/main.ts</code> ·
+          <code>eval/suite.ts</code>
+        </p>
+      </footer>
+    </div>
+
+    <script>
+      (() => {
+        const html = document.documentElement;
+        const btn = document.getElementById('themeToggle');
+        const saved = localStorage.getItem('theme');
+        if (saved) html.dataset.theme = saved;
+        const icons = { auto: '◐', light: '☀', dark: '☾' };
+        const update = () => { btn.textContent = icons[html.dataset.theme || 'auto']; };
+        update();
+        btn.addEventListener('click', () => {
+          const t = html.dataset.theme;
+          const next = !t || t === 'auto' ? 'light' : t === 'light' ? 'dark' : 'auto';
+          html.dataset.theme = next === 'auto' ? '' : next;
+          if (next === 'auto') { localStorage.removeItem('theme'); delete html.dataset.theme; }
+          else localStorage.setItem('theme', next);
+          update();
+        });
+      })();
+      document.querySelectorAll("[data-quiz]").forEach((quiz) => {
+        const feedback = quiz.querySelector("[data-feedback]");
+        const buttons = [...quiz.querySelectorAll("button")];
+        buttons.forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const correct = btn.dataset.correct === "true";
+            buttons.forEach((b) => {
+              b.disabled = true;
+              if (b.dataset.correct === "true") b.classList.add("correct");
+            });
+            if (!correct) btn.classList.add("wrong");
+            if (feedback) {
+              feedback.textContent = correct ? "正确。" : "再想想。";
+            }
+          });
+        });
+      });
+    </script>
+  </body>
+</html>

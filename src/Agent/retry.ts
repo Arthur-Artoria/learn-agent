@@ -26,8 +26,10 @@ export const retry = <T extends unknown[], R>(
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
+        console.log(args);
         return await fn(...args);
       } catch (error: unknown) {
+        console.error(error);
         lastError = error;
         if (!isRetryable(error) || attempt === maxRetries) {
           throw error;
