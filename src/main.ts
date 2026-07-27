@@ -6,16 +6,33 @@ import { formatTrajectory } from './Agent/trajectory';
 import { ToolRegistry } from './tools/registry';
 import { todoTools } from './tools/todo';
 import readline from 'node:readline/promises';
-import { stdin as input, stdout as output } from 'process'
+import { stdin as input, stdout as output } from 'process';
 
+const WELCOME = `
+╔══════════════════════════════════════════════╗
+║       📋 个人任务管家 · TaskMate CLI          ║
+║          基于 OpenAI Responses API            ║
+╠══════════════════════════════════════════════╣
+║  命令:                                       ║
+║    /help   — 显示帮助                        ║
+║    /exit   — 退出并保存会话                   ║
+║                                              ║
+║  你可以用自然语言管理待办事项。试试说：           ║
+║  · "添加待办：买菜"                           ║
+║  · "列出所有待办"                             ║
+║  · "把买菜标记为完成"                         ║
+║  · "搜索关键词 买"                            ║
+║  · "删除买菜的待办"                           ║
+╚══════════════════════════════════════════════╝
+`;
+
+const EXIT = '\n👋 会话已保存，再见！';
 
 const setup = async () => {
   const client = new OpenAI({
-    baseURL: process.env.CHIYICN_BASE_URL,
-    apiKey: process.env.CHIYICN_API_KEY,
+    baseURL: process.env.GODEX_BASE_URL,
+    apiKey: process.env.GODEX_API_KEY ?? 'not-needed',
   });
-
-  console.log(process.env.CHIYICN_BASE_URL, process.env.CHIYICN_API_KEY);
 
   const registry = new ToolRegistry();
   for (const tool of todoTools) {
@@ -56,11 +73,33 @@ const setup = async () => {
   };
 
   const rl = readline.createInterface({ input, output });
+  console.log(WELCOME);
 
-  console.log('请输入你的请求：');
-  console.log('输入 "Ctrl+C" 两次退出');
   for await (const line of rl) {
-    await run(line);
+    const trimmed = line.trim();
+
+    if (trimmed === '/exit' || trimmed === '/quit') {
+      console.log(EXIT);
+      rl.close();
+      break;
+    }
+
+    if (trimmed === '/help') {
+      console.log(WELCOME);
+      continue;
+    }
+
+    if (trimmed.length === 0) {
+      console.log('请输入一个请求，或输入 /help 查看帮助。\n');
+      continue;
+    }
+
+    try {
+      await run(trimmed);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`\n❌ 出错了: ${message}\n`);
+    }
   }
 };
 
